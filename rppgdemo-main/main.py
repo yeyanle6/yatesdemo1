@@ -49,7 +49,8 @@ class Config:
     roi_scale_x: float = 1.1
     roi_scale_y: float = 1.1
     roi_shift_y: float = 0.0
-    enable_adaptive_roi: bool = True
+    # Experimental: disabled by default to avoid cross-scene regressions.
+    enable_adaptive_roi: bool = False
     adaptive_roi_debug: bool = False
     adaptive_roi_window_sec: int = 8
     adaptive_roi_low_hr_bpm: float = 82.0
@@ -1154,6 +1155,14 @@ class FusionEngine:
         self.ppi_recent: Deque[float] = deque(maxlen=5)
         self.last_freq_confidence: float = 0.0
 
+    def reset_tracking_state(self) -> None:
+        self.last_valid_hr = None
+        self.last_output_hr = None
+        self.history.clear()
+        self.recent_for_constraints.clear()
+        self.ppi_recent.clear()
+        self.last_freq_confidence = 0.0
+
     @staticmethod
     def _median(xs: List[float]) -> float:
         if not xs:
@@ -1826,9 +1835,9 @@ def main() -> None:
     parser.add_argument("--disable-ppi-assist", action="store_true",
                         help="force-disable PPI-assisted HR correction")
     parser.add_argument("--enable-adaptive-roi", action="store_true",
-                        help="force-enable lightweight ROI adaptation (opencv/hybrid7 only)")
+                        help="enable lightweight ROI adaptation (experimental, opencv/hybrid7 only)")
     parser.add_argument("--disable-adaptive-roi", action="store_true",
-                        help="force-disable lightweight ROI adaptation")
+                        help="disable lightweight ROI adaptation")
     parser.add_argument("--debug-adaptive-roi", action="store_true",
                         help="print adaptive ROI switch events")
     parser.add_argument("--show", action="store_true", help="show debug window")
@@ -2046,9 +2055,16 @@ def main() -> None:
                         ppi_hr=ppi_hr,
                         freq_conf=freq_conf,
                     )
+                    switched_profile = bool(adapt_msg and adapt_msg.startswith("switch ->"))
+                    if switched_profile:
+                        # Drop stale history when ROI geometry changes.
+                        roi_buf.clear()
+                        roi_weights.clear()
+                        fusion.reset_tracking_state()
                     if adapt_msg and cfg.adaptive_roi_debug:
                         print(f"[ROI-ADAPT] t={now - t0:6.1f}s {adapt_msg}")
-                    hr_final = fusion.apply_physiological_constraints(hr_raw)
+                    if not switched_profile:
+                        hr_final = fusion.apply_physiological_constraints(hr_raw)
 
                 if hr_final is not None and cfg.enable_ppi_assist:
                     hr_final = fusion.apply_ppi_assist(hr_final, ppi_hr, sqi, freq_conf=freq_conf)

@@ -648,12 +648,19 @@ def process_video(
                     ppi_hr=ppi_hr,
                     freq_conf=freq_conf,
                 )
+                switched_profile = bool(adapt_msg and adapt_msg.startswith("switch ->"))
+                if switched_profile:
+                    # Drop stale ROI streams accumulated under old geometry.
+                    roi_buf.clear()
+                    roi_weights.clear()
+                    fusion.reset_tracking_state()
                 if adapt_msg and cfg.adaptive_roi_debug:
                     print(
                         f"[ROI-ADAPT] sample={sample.group}/{sample.stem} "
                         f"sec={sec} {adapt_msg}"
                     )
-                hr_final = fusion.apply_physiological_constraints(hr_raw)
+                if not switched_profile:
+                    hr_final = fusion.apply_physiological_constraints(hr_raw)
 
             if hr_final is not None and cfg.enable_ppi_assist:
                 hr_final = fusion.apply_ppi_assist(hr_final, ppi_hr, sqi, freq_conf=freq_conf)
@@ -947,8 +954,8 @@ def main() -> None:
     parser.add_argument("--use-published", action="store_true")
     parser.add_argument("--enable-ppi-assist", action="store_true")
     parser.add_argument("--disable-ppi-assist", action="store_true")
-    parser.add_argument("--enable-adaptive-roi", action="store_true")
-    parser.add_argument("--disable-adaptive-roi", action="store_true")
+    parser.add_argument("--enable-adaptive-roi", action="store_true", help="enable experimental adaptive ROI switching")
+    parser.add_argument("--disable-adaptive-roi", action="store_true", help="disable adaptive ROI switching")
     parser.add_argument("--debug-adaptive-roi", action="store_true")
     parser.add_argument("--split-file", default="", help="optional split definition file (train/test)")
     parser.add_argument("--holdout-list", default="", help="comma-separated test items like 001/3-3,002/3-4")

@@ -61,6 +61,12 @@ python main.py --source webcam --roi-mode opencv --show
 - `cheek_forehead6`
 - `whole_face`
 
+轻量 ROI 自适应（实验性）：
+- 默认关闭（避免在跨场景数据集上回归）
+- 仅在 `opencv + hybrid7` 下生效
+- 手动开启：`--enable-adaptive-roi`
+- 手动关闭：`--disable-adaptive-roi`
+
 Python 3.12 注意：
 - 某些 `mediapipe` 发行版是 `tasks-only`（没有 `mp.solutions`）。
 - 这时 `--roi-mode mediapipe` 需要额外传模型路径：
