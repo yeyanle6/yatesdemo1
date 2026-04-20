@@ -1,7 +1,0 @@
-numpy>=1.24,<2.0
-scipy>=1.10
-opencv-python>=4.8
-# Desktop validation environment.
-# Prefer Python 3.11 for mediapipe compatibility with mp.solutions API.
-mediapipe>=0.10,<0.11
-
