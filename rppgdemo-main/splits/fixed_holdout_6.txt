@@ -1,0 +1,8 @@
+# Fixed holdout set for Demo2 (6 files)
+# format: split,group,stem
+test,001,3-3
+test,001,3-4
+test,002,3-3
+test,002,3-4
+test,003,3-2
+test,003,3-3

@@ -1,0 +1,5 @@
+# Keep repository focused on source code only.
+*
+!.gitignore
+!rppgdemo-main/
+!rppgdemo-main/**

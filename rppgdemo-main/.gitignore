@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+.venv-desktop/
+venv/
+.omc/
+.DS_Store
+._*
+results/
+*.zip
+ENVIRONMENTS.md
+requirements*.txt
+run_pi.sh
+scripts/check_env.sh
+scripts/rebuild_env.sh
