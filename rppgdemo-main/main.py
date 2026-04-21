@@ -62,14 +62,25 @@ class Config:
     adaptive_roi_min_bimodal_secs: int = 4
     adaptive_roi_min_freq_conf: float = 0.62
     adaptive_roi_max_freq_conf: float = 0.82
+    adaptive_roi_max_sqi_for_lock: float = 0.58
     adaptive_roi_min_ppi_gap: float = 10.0
     adaptive_roi_hold_sec: float = 12.0
     adaptive_roi_max_fallback_sec: float = 35.0
     adaptive_roi_cooldown_sec: float = 20.0
     adaptive_roi_fallback_preset: str = "classic4"
-    adaptive_roi_fallback_scale_x: float = 0.9
+    adaptive_roi_fallback_scale_x: float = 1.0
     adaptive_roi_fallback_scale_y: float = 1.0
     adaptive_roi_fallback_shift_y: float = 0.0
+    low_lock_rescue_enabled: bool = False
+    low_lock_rescue_sqi_max: float = 0.58
+    low_lock_rescue_hr_max: float = 92.0
+    low_lock_rescue_low_candidate_bpm: float = 86.0
+    low_lock_rescue_high_candidate_bpm: float = 100.0
+    low_lock_rescue_min_high_count: int = 3
+    low_lock_rescue_min_hit_count: int = 2
+    low_lock_rescue_window: int = 6
+    low_lock_rescue_lift_ratio: float = 0.65
+    low_lock_rescue_max_lift_bpm: float = 24.0
     use_cbcr_candidate: bool = False
     fusion_support_weight: float = 0.55
     fusion_temporal_weight: float = 0.30
@@ -102,6 +113,8 @@ class Config:
     publish_conf_sqi_weight: float = 0.45
     publish_conf_freq_weight: float = 0.35
     publish_conf_bias: float = 0.20
+    publish_min_freq_conf_for_output: float = 0.0
+    publish_min_sqi_for_output: float = 0.0
     high_hr_bias_threshold: float = 95.0
     high_hr_bias_gain: float = 1.0
     high_hr_bias_offset: float = 5.0
@@ -829,6 +842,8 @@ class AdaptiveROIController:
             return False
         ppi_gap_med = float(np.median(np.array(ppi_gaps, dtype=np.float64)))
         freq_conf_med = float(np.median(np.array([x["freq_conf"] for x in recent], dtype=np.float64)))
+        sqis = [x["sqi"] for x in recent if math.isfinite(x["sqi"])]
+        sqi_med = float(np.median(np.array(sqis, dtype=np.float64))) if sqis else 1.0
         return (
             low_lock_secs >= self.cfg.adaptive_roi_min_lock_secs
             and very_low_secs >= self.cfg.adaptive_roi_min_very_low_secs
@@ -836,6 +851,7 @@ class AdaptiveROIController:
             and ppi_gap_med >= self.cfg.adaptive_roi_min_ppi_gap
             and freq_conf_med >= self.cfg.adaptive_roi_min_freq_conf
             and freq_conf_med <= self.cfg.adaptive_roi_max_freq_conf
+            and sqi_med <= self.cfg.adaptive_roi_max_sqi_for_lock
         )
 
     def _lock_cleared(self) -> bool:
@@ -856,6 +872,7 @@ class AdaptiveROIController:
         hr_raw: float,
         ppi_hr: Optional[float],
         freq_conf: float,
+        sqi: Optional[float] = None,
     ) -> Optional[str]:
         if not self.enabled or not tagged:
             return None
@@ -863,10 +880,12 @@ class AdaptiveROIController:
         low_cnt = float(sum(1 for v, _, _ in tagged if v < self.cfg.adaptive_roi_low_candidate_bpm))
         high_cnt = float(sum(1 for v, _, _ in tagged if v > self.cfg.adaptive_roi_high_candidate_bpm))
         ppi_gap = float(ppi_hr - hr_raw) if ppi_hr is not None else float("nan")
+        sqi_v = float(sqi) if (sqi is not None and math.isfinite(float(sqi))) else float("nan")
         self.history.append(
             {
                 "hr_raw": float(hr_raw),
                 "freq_conf": float(freq_conf),
+                "sqi": sqi_v,
                 "low_cnt": low_cnt,
                 "high_cnt": high_cnt,
                 "ppi_gap": ppi_gap,
@@ -1153,6 +1172,7 @@ class FusionEngine:
         self.history: Deque[float] = deque(maxlen=20)
         self.recent_for_constraints: Deque[float] = deque(maxlen=5)
         self.ppi_recent: Deque[float] = deque(maxlen=5)
+        self.low_lock_hits: Deque[int] = deque(maxlen=max(3, int(cfg.low_lock_rescue_window)))
         self.last_freq_confidence: float = 0.0
 
     def reset_tracking_state(self) -> None:
@@ -1161,6 +1181,7 @@ class FusionEngine:
         self.history.clear()
         self.recent_for_constraints.clear()
         self.ppi_recent.clear()
+        self.low_lock_hits.clear()
         self.last_freq_confidence = 0.0
 
     @staticmethod
@@ -1227,12 +1248,16 @@ class FusionEngine:
                 result.append(v)
         return result if result else tagged
 
-    def harmonic_temporal_fusion(self, tagged: List[Tuple[float, str, str]]) -> Tuple[float, float]:
-        valid = [x for x in tagged if self.cfg.min_bpm_valid <= x[0] <= self.cfg.max_bpm_valid]
-        if not valid:
+    def harmonic_temporal_fusion(
+        self,
+        tagged: List[Tuple[float, str, str]],
+        sqi: Optional[float] = None,
+    ) -> Tuple[float, float]:
+        valid_raw = [x for x in tagged if self.cfg.min_bpm_valid <= x[0] <= self.cfg.max_bpm_valid]
+        if not valid_raw:
             return 0.0, 0.0
 
-        valid = self._remove_outliers(valid)
+        valid = self._remove_outliers(valid_raw)
         if not valid:
             return 0.0, 0.0
 
@@ -1269,6 +1294,28 @@ class FusionEngine:
             continuity = math.exp(-abs(hr - self.last_valid_hr) / max(1e-6, self.cfg.temporal_sigma_bpm))
             freq_conf = 0.75 * freq_conf + 0.25 * continuity
         freq_conf = float(max(0.0, min(1.0, freq_conf)))
+
+        if self.cfg.low_lock_rescue_enabled:
+            arr = np.array([v[0] for v in valid_raw], dtype=np.float64)
+            low_cnt = int(np.sum(arr < self.cfg.low_lock_rescue_low_candidate_bpm))
+            high_vals = arr[arr > self.cfg.low_lock_rescue_high_candidate_bpm]
+            p90 = float(np.quantile(arr, 0.90)) if len(arr) >= 3 else float(np.max(arr))
+            sqi_ok = (sqi is None) or (float(sqi) <= self.cfg.low_lock_rescue_sqi_max)
+            low_locked = (
+                hr <= self.cfg.low_lock_rescue_hr_max
+                and sqi_ok
+                and low_cnt >= max(4, int(0.5 * len(arr)))
+                and len(high_vals) >= self.cfg.low_lock_rescue_min_high_count
+                and p90 >= self.cfg.low_lock_rescue_high_candidate_bpm
+            )
+            self.low_lock_hits.append(1 if low_locked else 0)
+            if sum(self.low_lock_hits) >= self.cfg.low_lock_rescue_min_hit_count and len(high_vals) > 0:
+                target = float(np.median(high_vals))
+                if target > hr:
+                    lift = (target - hr) * self.cfg.low_lock_rescue_lift_ratio
+                    lift = min(self.cfg.low_lock_rescue_max_lift_bpm, lift)
+                    hr = min(self.cfg.clamp_max_bpm, hr + max(0.0, lift))
+
         self.last_freq_confidence = freq_conf
         return hr, freq_conf
 
@@ -1840,6 +1887,10 @@ def main() -> None:
                         help="disable lightweight ROI adaptation")
     parser.add_argument("--debug-adaptive-roi", action="store_true",
                         help="print adaptive ROI switch events")
+    parser.add_argument("--publish-min-freq-conf", type=float, default=0.0,
+                        help="only publish output when freq_conf >= threshold (0 disables gate)")
+    parser.add_argument("--publish-min-sqi", type=float, default=0.0,
+                        help="only publish output when SQI >= threshold (0 disables gate)")
     parser.add_argument("--show", action="store_true", help="show debug window")
     parser.add_argument("--print-every", type=float, default=1.0, help="seconds")
     parser.add_argument("--debug-hr", action="store_true", help="print per-ROI/algo HR candidates")
@@ -1860,6 +1911,8 @@ def main() -> None:
         cfg.enable_adaptive_roi = False
     if args.debug_adaptive_roi:
         cfg.adaptive_roi_debug = True
+    cfg.publish_min_freq_conf_for_output = float(max(0.0, min(1.0, args.publish_min_freq_conf)))
+    cfg.publish_min_sqi_for_output = float(max(0.0, min(1.0, args.publish_min_sqi)))
     cfg.roi_preset = args.roi_preset
     cfg.roi_scale_x = args.roi_scale_x
     cfg.roi_scale_y = args.roi_scale_y
@@ -2047,13 +2100,14 @@ def main() -> None:
                         )
 
                 if tagged:
-                    hr_raw, freq_conf = fusion.harmonic_temporal_fusion(tagged)
+                    hr_raw, freq_conf = fusion.harmonic_temporal_fusion(tagged, sqi=sqi)
                     adapt_msg = adaptive_roi_ctl.update(
                         now_sec=now - t0,
                         tagged=tagged,
                         hr_raw=hr_raw,
                         ppi_hr=ppi_hr,
                         freq_conf=freq_conf,
+                        sqi=sqi,
                     )
                     switched_profile = bool(adapt_msg and adapt_msg.startswith("switch ->"))
                     if switched_profile:
@@ -2092,7 +2146,10 @@ def main() -> None:
                         ),
                     )
                     published, _, _ = quality_ctl.apply(hr_best, conf, combined_quality, now)
-                    if published is not None:
+                    if published is not None and (
+                        freq_conf >= cfg.publish_min_freq_conf_for_output
+                        and sqi >= cfg.publish_min_sqi_for_output
+                    ):
                         hr_published = published
 
             if now - last_print >= args.print_every:

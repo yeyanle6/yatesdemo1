@@ -640,13 +640,14 @@ def process_video(
                     )
 
             if tagged:
-                hr_raw, freq_conf = fusion.harmonic_temporal_fusion(tagged)
+                hr_raw, freq_conf = fusion.harmonic_temporal_fusion(tagged, sqi=sqi)
                 adapt_msg = adaptive_roi_ctl.update(
                     now_sec=float(sec),
                     tagged=tagged,
                     hr_raw=hr_raw,
                     ppi_hr=ppi_hr,
                     freq_conf=freq_conf,
+                    sqi=sqi,
                 )
                 switched_profile = bool(adapt_msg and adapt_msg.startswith("switch ->"))
                 if switched_profile:
@@ -688,7 +689,10 @@ def process_video(
                     ),
                 )
                 published, _, _ = quality_ctl.apply(hr_best, conf, combined_quality, float(sec))
-                if published is not None:
+                if published is not None and (
+                    freq_conf >= cfg.publish_min_freq_conf_for_output
+                    and sqi >= cfg.publish_min_sqi_for_output
+                ):
                     hr_pub = published
 
             predictions[sec] = {
@@ -957,6 +961,10 @@ def main() -> None:
     parser.add_argument("--enable-adaptive-roi", action="store_true", help="enable experimental adaptive ROI switching")
     parser.add_argument("--disable-adaptive-roi", action="store_true", help="disable adaptive ROI switching")
     parser.add_argument("--debug-adaptive-roi", action="store_true")
+    parser.add_argument("--publish-min-freq-conf", type=float, default=0.0,
+                        help="when --use-published, keep outputs only if freq_conf >= threshold")
+    parser.add_argument("--publish-min-sqi", type=float, default=0.0,
+                        help="when --use-published, keep outputs only if SQI >= threshold")
     parser.add_argument("--split-file", default="", help="optional split definition file (train/test)")
     parser.add_argument("--holdout-list", default="", help="comma-separated test items like 001/3-3,002/3-4")
     parser.add_argument("--split-set", choices=["all", "train", "test"], default="all")
@@ -1000,6 +1008,8 @@ def main() -> None:
         cfg.enable_adaptive_roi = False
     if args.debug_adaptive_roi:
         cfg.adaptive_roi_debug = True
+    cfg.publish_min_freq_conf_for_output = float(max(0.0, min(1.0, args.publish_min_freq_conf)))
+    cfg.publish_min_sqi_for_output = float(max(0.0, min(1.0, args.publish_min_sqi)))
     cfg.roi_preset = args.roi_preset
     cfg.roi_scale_x = args.roi_scale_x
     cfg.roi_scale_y = args.roi_scale_y

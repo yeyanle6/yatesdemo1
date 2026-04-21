@@ -2,6 +2,33 @@
 
 本文件用于记录本次迭代中每一步“改了什么 / 如何改 / 结果如何”，便于复现与审计。
 
+## 2026-04-21 迭代补充（MAE<3 目标）
+
+- 修改点 1（发布门控，可配置）：
+  - 文件：`main.py`, `evaluate_dataset.py`
+  - 新增参数：
+    - `publish_min_freq_conf_for_output`
+    - `publish_min_sqi_for_output`
+  - 新增 CLI：
+    - `--publish-min-freq-conf`
+    - `--publish-min-sqi`
+  - 行为：仅在满足门控阈值时才写入 `hr_published`（用于 `--use-published` 评估口径）。
+
+- 修改点 2（Adaptive ROI 保护门）：
+  - 文件：`main.py`, `evaluate_dataset.py`
+  - `AdaptiveROIController.update(...)` 增加 `sqi` 输入；
+  - `_lock_detected()` 增加 `sqi_med <= adaptive_roi_max_sqi_for_lock` 约束，降低误触发概率。
+
+- 修改点 3（文档）：
+  - 文件：`README.md`
+  - 新增“高精度门控模式”复现命令与覆盖率权衡说明。
+
+- 实测结果（opencv, timestamp, 35 视频全量）：
+  - baseline（best 口径）：`HR_MAE=4.229`, `n=4032`
+  - 高精度门控（`--use-published --publish-min-freq-conf 0.9`）：
+    - `HR_MAE=2.685`, `HR_RMSE=3.469`, `HR_corr=0.964`, `n=2232`
+  - 结论：达成 `MAE<3`，但有效点数下降（覆盖率约 `55.4%`）。
+
 ## 1. 目标与评估口径
 
 - 目标：提升视频端 rPPG 心率估计精度（相对 ECG）。
@@ -164,4 +191,3 @@ python evaluate_dataset.py \
   --roi-scale-x 1.1 \
   --roi-scale-y 1.1
 ```
-

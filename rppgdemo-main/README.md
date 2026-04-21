@@ -128,6 +128,22 @@ python evaluate_dataset.py --roi-mode mediapipe
 python evaluate_dataset.py --roi-mode opencv
 ```
 
+高精度门控模式（以覆盖率换 MAE）：
+
+```bash
+python evaluate_dataset.py \
+  --data-dir /Users/liangwenwang/Downloads/Code/Demo2/Data \
+  --roi-mode opencv \
+  --use-published \
+  --publish-min-freq-conf 0.9 \
+  --disable-adaptive-roi \
+  --metrics hr
+```
+
+说明：
+- 该模式会仅保留高频域置信度输出（`freq_conf >= 0.9`）
+- 在当前 35 视频全量评估中可将 HR MAE 压到 `<3`，但会显著降低有效点数（覆盖率下降）
+
 新输出 detail 会包含：
 - HR 对齐误差
 - `HF / LF/HF / LF ratio` 估计值与误差
