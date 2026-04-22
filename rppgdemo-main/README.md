@@ -144,6 +144,17 @@ python evaluate_dataset.py \
 - 该模式会仅保留高频域置信度输出（`freq_conf >= 0.9`）
 - 在当前 35 视频全量评估中可将 HR MAE 压到 `<3`，但会显著降低有效点数（覆盖率下降）
 
+双通道导出（一次运行同时导出 `best` + `published`）：
+
+```bash
+python evaluate_dataset.py \
+  --data-dir /Users/liangwenwang/Downloads/Code/Demo2/Data \
+  --roi-mode opencv \
+  --export-dual-channel \
+  --publish-min-freq-conf 0.9 \
+  --metrics hr
+```
+
 新输出 detail 会包含：
 - HR 对齐误差
 - `HF / LF/HF / LF ratio` 估计值与误差

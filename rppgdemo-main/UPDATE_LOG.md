@@ -29,6 +29,24 @@
     - `HR_MAE=2.685`, `HR_RMSE=3.469`, `HR_corr=0.964`, `n=2232`
   - 结论：达成 `MAE<3`，但有效点数下降（覆盖率约 `55.4%`）。
 
+## 2026-04-22 迭代补充（双通道导出）
+
+- 修改点 1（离线评估双通道导出）：
+  - 文件：`evaluate_dataset.py`
+  - 新增 CLI：`--export-dual-channel`
+  - 行为：一次运行同时导出 `best` 与 `published` 两套 detail/summary CSV。
+
+- 修改点 2（输出字段标识）：
+  - 文件：`evaluate_dataset.py`
+  - detail/summary 新增 `export_channel` 字段，用于区分 `best` 与 `published`。
+
+- 验证结果（diag_3）：
+  - 同一次运行已生成：
+    - `rppg_ecg_comparison_best_opencv_timestamp.csv`
+    - `rppg_ecg_summary_best_opencv_timestamp.csv`
+    - `rppg_ecg_comparison_published_opencv_timestamp.csv`
+    - `rppg_ecg_summary_published_opencv_timestamp.csv`
+
 ## 1. 目标与评估口径
 
 - 目标：提升视频端 rPPG 心率估计精度（相对 ECG）。

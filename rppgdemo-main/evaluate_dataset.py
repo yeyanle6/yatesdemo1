@@ -965,6 +965,8 @@ def main() -> None:
                         help="when --use-published, keep outputs only if freq_conf >= threshold")
     parser.add_argument("--publish-min-sqi", type=float, default=0.0,
                         help="when --use-published, keep outputs only if SQI >= threshold")
+    parser.add_argument("--export-dual-channel", action="store_true",
+                        help="export both best and published channels in one run")
     parser.add_argument("--split-file", default="", help="optional split definition file (train/test)")
     parser.add_argument("--holdout-list", default="", help="comma-separated test items like 001/3-3,002/3-4")
     parser.add_argument("--split-set", choices=["all", "train", "test"], default="all")
@@ -1015,10 +1017,18 @@ def main() -> None:
     cfg.roi_scale_y = args.roi_scale_y
     cfg.roi_shift_y = args.roi_shift_y
 
+    if args.export_dual_channel:
+        channel_modes: List[Tuple[str, bool]] = [("best", False), ("published", True)]
+    else:
+        channel_modes = [("published", True)] if args.use_published else [("best", False)]
+
     for roi_mode in roi_modes:
-        all_detail_rows: List[Dict[str, object]] = []
-        summary_rows: List[Dict[str, object]] = []
-        per_split_rows: Dict[str, List[Dict[str, object]]] = {"train": [], "test": []}
+        all_detail_rows_by: Dict[str, List[Dict[str, object]]] = {tag: [] for tag, _ in channel_modes}
+        summary_rows_by: Dict[str, List[Dict[str, object]]] = {tag: [] for tag, _ in channel_modes}
+        per_split_rows_by: Dict[str, Dict[str, List[Dict[str, object]]]] = {
+            tag: {"train": [], "test": []} for tag, _ in channel_modes
+        }
+
         print(
             f"\n[MODE] profile={args.config_profile} roi_mode={roi_mode} "
             f"metrics={sorted(metrics)} align={args.align_mode}"
@@ -1049,35 +1059,55 @@ def main() -> None:
                 break
 
             ecg = load_ecg_series(s.ecg_csv_path, align_mode=args.align_mode)
-            compared = compare_to_ecg(
-                pred_rows,
-                ecg,
-                use_published=args.use_published,
-                metrics=metrics,
-            )
+            sample_metrics: Dict[str, Dict[str, Dict[str, float]]] = {}
 
-            used_mode = compared[0]["roi_mode"] if compared else "none"
-            for r in compared:
-                r["split"] = split_name
-                r["config_profile"] = args.config_profile
-            all_detail_rows.extend(compared)
-            per_split_rows.setdefault(split_name, []).extend(compared)
+            for channel_tag, use_published in channel_modes:
+                compared = compare_to_ecg(
+                    pred_rows,
+                    ecg,
+                    use_published=use_published,
+                    metrics=metrics,
+                )
+                used_mode = compared[0]["roi_mode"] if compared else "none"
+                for r in compared:
+                    r["split"] = split_name
+                    r["config_profile"] = args.config_profile
+                    r["export_channel"] = channel_tag
+                all_detail_rows_by[channel_tag].extend(compared)
+                per_split_rows_by[channel_tag].setdefault(split_name, []).extend(compared)
 
-            metric_summary = summarize_all_metrics(compared)
-            _append_sample_summary(summary_rows, s, split_name, roi_mode, used_mode, metric_summary)
-            hr = metric_summary["hr"]
-            lf = metric_summary["lf_composite"]
-            print(
-                f"      HR: n={int(hr['n'])} MAE={hr['mae']:.3f} RMSE={hr['rmse']:.3f} corr={hr['corr']:.3f} | "
-                f"LF: MAE={lf['mae']:.3f} MAPE={lf['mape']:.2f}% corr={lf['corr']:.3f}"
-            )
+                metric_summary = summarize_all_metrics(compared)
+                _append_sample_summary(summary_rows_by[channel_tag], s, split_name, roi_mode, used_mode, metric_summary)
+                sample_metrics[channel_tag] = metric_summary
+
+            if args.export_dual_channel:
+                hr_best = sample_metrics["best"]["hr"]
+                hr_pub = sample_metrics["published"]["hr"]
+                print(
+                    f"      HR(best): n={int(hr_best['n'])} MAE={hr_best['mae']:.3f} "
+                    f"RMSE={hr_best['rmse']:.3f} corr={hr_best['corr']:.3f} | "
+                    f"HR(published): n={int(hr_pub['n'])} MAE={hr_pub['mae']:.3f} "
+                    f"RMSE={hr_pub['rmse']:.3f} corr={hr_pub['corr']:.3f}"
+                )
+            else:
+                channel_tag = channel_modes[0][0]
+                hr = sample_metrics[channel_tag]["hr"]
+                lf = sample_metrics[channel_tag]["lf_composite"]
+                print(
+                    f"      HR: n={int(hr['n'])} MAE={hr['mae']:.3f} RMSE={hr['rmse']:.3f} corr={hr['corr']:.3f} | "
+                    f"LF: MAE={lf['mae']:.3f} MAPE={lf['mape']:.2f}% corr={lf['corr']:.3f}"
+                )
 
         if mode_failed:
             continue
 
-        def _append_overall(split_name: str, rows: List[Dict[str, object]]) -> None:
+        def _append_overall(
+            summary_target: List[Dict[str, object]],
+            split_name: str,
+            rows: List[Dict[str, object]],
+        ) -> None:
             m = summarize_all_metrics(rows)
-            summary_rows.append(
+            summary_target.append(
                 {
                     "split": split_name,
                     "group": "ALL",
@@ -1109,18 +1139,10 @@ def main() -> None:
                 }
             )
 
-        if per_split_rows.get("train"):
-            _append_overall("TRAIN_ALL", per_split_rows["train"])
-        if per_split_rows.get("test"):
-            _append_overall("TEST_ALL", per_split_rows["test"])
-        if all_detail_rows:
-            _append_overall("ALL", all_detail_rows)
-        for row in summary_rows:
-            row["config_profile"] = args.config_profile
-
         detail_cols = [
             "split",
             "config_profile",
+            "export_channel",
             "group",
             "stem",
             "roi_mode_requested",
@@ -1177,6 +1199,7 @@ def main() -> None:
         summary_cols = [
             "split",
             "config_profile",
+            "export_channel",
             "group",
             "stem",
             "roi_mode_requested",
@@ -1205,23 +1228,38 @@ def main() -> None:
             "lf_composite_corr",
         ]
 
-        metric_tag = "published" if args.use_published else "best"
         profile_suffix = "" if args.config_profile == "python_latest" else f"_{args.config_profile}"
-        detail_path = out_dir / f"rppg_ecg_comparison_{metric_tag}_{roi_mode}_{args.align_mode}{profile_suffix}.csv"
-        summary_path = out_dir / f"rppg_ecg_summary_{metric_tag}_{roi_mode}_{args.align_mode}{profile_suffix}.csv"
+        for channel_tag, _ in channel_modes:
+            detail_rows = all_detail_rows_by[channel_tag]
+            summary_rows = summary_rows_by[channel_tag]
+            per_split_rows = per_split_rows_by[channel_tag]
 
-        write_csv(detail_path, all_detail_rows, detail_cols)
-        write_csv(summary_path, summary_rows, summary_cols)
+            if per_split_rows.get("train"):
+                _append_overall(summary_rows, "TRAIN_ALL", per_split_rows["train"])
+            if per_split_rows.get("test"):
+                _append_overall(summary_rows, "TEST_ALL", per_split_rows["test"])
+            if detail_rows:
+                _append_overall(summary_rows, "ALL", detail_rows)
 
-        overall = summarize_all_metrics(all_detail_rows)
-        print(f"\n[OK] detail:  {detail_path}")
-        print(f"[OK] summary: {summary_path}")
-        print(
-            f"[ALL] HR_MAE={overall['hr']['mae']:.3f} HR_RMSE={overall['hr']['rmse']:.3f} "
-            f"HR_corr={overall['hr']['corr']:.3f} | "
-            f"LF_MAE={overall['lf_composite']['mae']:.3f} LF_MAPE={overall['lf_composite']['mape']:.2f}% "
-            f"LF_corr={overall['lf_composite']['corr']:.3f}"
-        )
+            for row in summary_rows:
+                row["config_profile"] = args.config_profile
+                row["export_channel"] = channel_tag
+
+            detail_path = out_dir / f"rppg_ecg_comparison_{channel_tag}_{roi_mode}_{args.align_mode}{profile_suffix}.csv"
+            summary_path = out_dir / f"rppg_ecg_summary_{channel_tag}_{roi_mode}_{args.align_mode}{profile_suffix}.csv"
+            write_csv(detail_path, detail_rows, detail_cols)
+            write_csv(summary_path, summary_rows, summary_cols)
+
+            overall = summarize_all_metrics(detail_rows)
+            tag = f"[{channel_tag}]"
+            print(f"\n[OK]{tag} detail:  {detail_path}")
+            print(f"[OK]{tag} summary: {summary_path}")
+            print(
+                f"[ALL]{tag} HR_MAE={overall['hr']['mae']:.3f} HR_RMSE={overall['hr']['rmse']:.3f} "
+                f"HR_corr={overall['hr']['corr']:.3f} | "
+                f"LF_MAE={overall['lf_composite']['mae']:.3f} LF_MAPE={overall['lf_composite']['mape']:.2f}% "
+                f"LF_corr={overall['lf_composite']['corr']:.3f}"
+            )
 
 
 if __name__ == "__main__":
