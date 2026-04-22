@@ -915,6 +915,21 @@ h3 {{ font-size:15px; color:#1f3340; margin-top:14px; }}
     linear-gradient(130deg, rgba(15,118,110,0.07), rgba(217,119,6,0.07)),
     var(--panel);
 }}
+.hero-head {{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+  flex-wrap:wrap;
+}}
+.lang-box {{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:12px;
+  color:var(--muted);
+}}
+.lang-box select {{ min-width: 118px; }}
 .kpi-grid {{
   margin-top:12px;
   display:grid;
@@ -1038,6 +1053,7 @@ input[type="text"], select {{
   }}
   .toc-title {{ display:none; }}
   .toc a {{ margin:0; background:#f4fafb; border:1px solid #d8e6ea; }}
+  .hero-head {{ align-items:stretch; }}
 }}
 </style>
 </head>
@@ -1058,8 +1074,18 @@ input[type="text"], select {{
 
   <main class="content">
     <header class="hero panel">
-      <h1>rPPG 参数阈值与逐文件 HR 对比报告</h1>
-      <div class="muted">
+      <div class="hero-head">
+        <h1>rPPG 参数阈值与逐文件 HR 对比报告</h1>
+        <div class="lang-box">
+          <span id="langLabel">语言</span>
+          <select id="langSelect" aria-label="language selector">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+          </select>
+        </div>
+      </div>
+      <div class="muted" id="pageSubtitle">
         输入：逐秒对齐 CSV。主目标是把“准确度 / 覆盖率 / 可用速度”同时放在同一页中对比，先看顶层结论，再下钻到单文件。
       </div>
       <div class="muted" id="suspectSummary"></div>
@@ -1323,6 +1349,255 @@ const WARMUP_THRESHOLDS = {warmup_threshold_js};
 const GENERALIZATION = {generalization_json};
 const LAG_ANALYSIS = {lag_json};
 const SUSPECT_SAMPLES = {suspect_samples_json};
+const I18N = {{
+  zh: {{
+    langName: "中文",
+    langLabel: "语言",
+    tocTitle: "目录",
+    tocLinks: ["阈值总览","图形速览","最短等待时间","达到 K 点时间","逐样本矩阵","每文件 HR 数值","每文件 HR 曲线","泛化分析","ECG-rPPG 位移"],
+    title: "rPPG 参数阈值与逐文件 HR 对比报告",
+    subtitle: "输入：逐秒对齐 CSV。主目标是把“准确度 / 覆盖率 / 可用速度”同时放在同一页中对比，先看顶层结论，再下钻到单文件。",
+    kpiLabels: ["最佳阈值","最佳 MAE","最佳 MAE(排疑似)","最佳 Accuracy","该阈值覆盖率","当前发布 MAE","当前发布 Accuracy","当前/基线覆盖","当前最差样本"],
+    sectionTitles: {{
+      overall: "总体阈值对比",
+      visuals: "图形速览",
+      warmup: "最短时间与精度可视化",
+      timeToK: "达到 K 个高置信点所需秒数（按视频分布）",
+      matrix: "逐样本参数矩阵（MAE / 覆盖率）",
+      hrTable: "每一个文件的 HR 测量数值对比",
+      hrPlot: "每文件逐秒 HR 曲线对比",
+      generalization: "泛化分析（当前发布策略 vs baseline）",
+      lag: "ECG-rPPG 位移（lag）分析",
+    }},
+    sectionDesc: {{
+      overall: "这是参数决策入口：阈值越高，通常 MAE 更好但覆盖率更低。Accuracy 定义为 max(0, 100 - MAPE%)，表示相对 ECG 的百分比精度。",
+      warmup: "目标：看“等待多少秒”能拿到更高精度 HR（min_sec + freq_conf 联合门控）。",
+      timeToK: "例如 q50 表示 50% 视频在该秒数前可拿到 K 个高置信点。",
+      matrix: "可针对单样本（如 003/1-1）横向看每个阈值的收益与代价。",
+      hrTable: "按阈值筛选后，给出每个文件的 ECG 均值 / rPPG 均值 / Bias / MAE / RMSE / MAPE% / Accuracy%。",
+    }},
+    cardTitles: {{
+      visuals: ["总体权衡","每样本 MAE 热力图","每样本覆盖率热力图"],
+      warmup: ["MAE vs min_sec","Coverage vs min_sec"],
+    }},
+    genCards: ["当前 MAE / RMSE / corr","基线 MAE / RMSE / corr","差值（当前-基线）","覆盖率"],
+    summaries: {{
+      warmup: "查看 warmup 明细表",
+      gen: ["Domain 对比","Group 对比（当前策略）","Group 相对 Baseline 变化","Worst Samples（当前策略）"],
+      lag: ["Lag 曲线数值（baseline vs current）","每样本 lag 改善（baseline）","每样本 lag 改善（current）","固定窗口 Lag 扫描（baseline）","Diff-Corr Lag（baseline）","Global Diff-Corr 曲线（baseline）"],
+    }},
+    labels: {{
+      threshold: "threshold",
+      sample: "sample",
+      sampleFilter: "sample 过滤",
+      metric: "metric",
+      language: "语言",
+    }},
+    placeholders: {{
+      matrixFilter: "筛选 sample...",
+      hrFilter: "输入 sample 关键字...",
+      chooseSample: "请选择 sample...",
+      all: "all",
+    }},
+    legend: ["ECG(all points)","ECG(filtered)","rPPG(filtered)"],
+    tables: {{
+      overall: ["threshold","n","coverage","MAE","RMSE","MAPE%","Accuracy%","Bias(rPPG-ECG)","MAE(排疑似)","RMSE(排疑似)","MAPE%(排疑似)","Accuracy%(排疑似)","ΔMAE(排疑似-原始)","ΔAccuracy"],
+      warmup: ["min_sec","n","coverage","MAE","RMSE"],
+      timeToK: ["threshold","K","have/miss","q0","q25","q50","q75","q90","q100"],
+      matrixFirst3: ["sample","n_all","mae_all"],
+      hr: ["sample","n_all","n_used","coverage","ECG均值","rPPG均值","Bias","MAE","RMSE","MAPE%","Accuracy%"],
+      genDomain: ["domain","n","sample_count","group_count","MAE","RMSE","corr","bias","p90_abs_error"],
+      genGroup: ["group_id","group_raw","n","sample_count","MAE","RMSE","corr","bias","p90_abs_error"],
+      genDelta: ["group_id","group_raw","n_base","n_cur","coverage_ratio","MAE_base","MAE_cur","Delta_MAE","RMSE_base","RMSE_cur","Delta_RMSE","corr_base","corr_cur","Delta_corr"],
+      genSample: ["sample","group_id","group_raw","n","MAE","RMSE","corr","bias","p90_abs_error","first_sec"],
+      lagCurve: ["lag","baseline_n","baseline_MAE","baseline_RMSE","current_n","current_MAE","current_RMSE"],
+      lagSample: ["sample","n0","mae_lag0","best_lag","best_mae","best_n","mae_gain","gain_ratio"],
+      lagCommon: ["sample","n_common","best_lag_mae","best_mae","lag0_mae","mae_gain","best_lag_corr","best_corr","lag0_corr","corr_gain"],
+      lagDiff: ["sample","n","lag0_diff_mae","lag0_diff_corr","best_lag_by_diff_corr","best_diff_mae","best_diff_corr","corr_gain"],
+      lagGlobal: ["lag","diff_mae","diff_corr","n"],
+    }},
+    msg: {{
+      suspectSummary: "疑似异常样本标记：{{chips}}（在表格中高亮；总体表显示排除这些样本后的 MAE/RMSE/Accuracy。Accuracy% = max(0, 100 - MAPE%)）",
+      noSuspect: "未设置疑似异常样本。",
+      noGeneralization: "未找到泛化分析 CSV（可通过 --generalization-*-csv 指定）。",
+      noLag: "未找到 lag 分析 CSV（可通过 --lag-*-csv 指定）。",
+      warmupHit: "fc>={{thr}} 时，最早在 min_sec={{min_sec}} 达到 MAE={{mae}}（coverage={{coverage}}）。",
+      warmupNoHit: "fc>={{thr}} 未达到 MAE<3。",
+      genMeta: "当前策略 n={{nCur}} / baseline n={{nBase}} | MAE {{maeCur}} vs {{maeBase}} (Δ{{dMae}}), RMSE {{rmseCur}} vs {{rmseBase}} (Δ{{dRmse}}), corr {{corrCur}} vs {{corrBase}} (Δ{{dCorr}}).",
+      lagMeta: "metric={{metric}} | baseline lag0={{b0}}, best={{bb}}@lag={{bl}} | current lag0={{c0}}, best={{cb}}@lag={{cl}}",
+      pickSample: "请选择一个 sample。",
+      noPoint: "{{sample}} 在 threshold={{thr}} 下没有可用点。",
+      plotMeta: "sample={{sample}} | threshold={{thr}} | n_used={{nUsed}}/{{nAll}} | coverage={{cov}} | MAE={{mae}} | RMSE={{rmse}} | MAPE={{mape}}% | Accuracy={{acc}}{{suspect}}",
+      suspectTag: " | [疑似异常样本]",
+      worstFmt: "{{sample}} (MAE={{mae}})",
+    }},
+  }},
+  en: {{
+    langName: "English",
+    langLabel: "Language",
+    tocTitle: "Contents",
+    tocLinks: ["Threshold Overview","Visual Snapshot","Fast Start Time","Time to K Points","Per-Sample Matrix","Per-File HR Values","Per-File HR Curves","Generalization","ECG-rPPG Lag"],
+    title: "rPPG Threshold and Per-File HR Comparison Report",
+    subtitle: "Input: per-second aligned CSV. This page compares accuracy, coverage, and time-to-usable output in one place: summary first, then per-file drill-down.",
+    kpiLabels: ["Best Threshold","Best MAE","Best MAE (Exclude Suspects)","Best Accuracy","Coverage @ Best Threshold","Published MAE","Published Accuracy","Current/Baseline Coverage","Worst Current Sample"],
+    sectionTitles: {{
+      overall: "Overall Threshold Comparison",
+      visuals: "Visual Snapshot",
+      warmup: "Fast Start vs Accuracy",
+      timeToK: "Seconds to Reach K High-Confidence Points",
+      matrix: "Per-Sample Parameter Matrix (MAE / Coverage)",
+      hrTable: "Per-File HR Numeric Comparison",
+      hrPlot: "Per-File Per-Second HR Curves",
+      generalization: "Generalization (Current Published vs Baseline)",
+      lag: "ECG-rPPG Lag Analysis",
+    }},
+    sectionDesc: {{
+      overall: "Main decision table: higher thresholds usually improve MAE but reduce coverage. Accuracy is defined as max(0, 100 - MAPE%) against ECG.",
+      warmup: "Goal: estimate how many seconds are needed to get higher-accuracy HR (joint gate: min_sec + freq_conf).",
+      timeToK: "For example, q50 means 50% of videos reach K points by that second.",
+      matrix: "Use one sample (e.g., 003/1-1) to inspect trade-offs across thresholds.",
+      hrTable: "After threshold filtering, this table shows ECG mean / rPPG mean / Bias / MAE / RMSE / MAPE% / Accuracy% for each file.",
+    }},
+    cardTitles: {{
+      visuals: ["Overall Trade-off","Per-Sample MAE Heatmap","Per-Sample Coverage Heatmap"],
+      warmup: ["MAE vs min_sec","Coverage vs min_sec"],
+    }},
+    genCards: ["Current MAE / RMSE / corr","Baseline MAE / RMSE / corr","Delta (Current - Baseline)","Coverage"],
+    summaries: {{
+      warmup: "Show warmup detail table",
+      gen: ["Domain Comparison","Group Comparison (Current)","Group Delta vs Baseline","Worst Samples (Current)"],
+      lag: ["Lag Curve Values (baseline vs current)","Per-Sample Lag Gain (baseline)","Per-Sample Lag Gain (current)","Fixed-Window Lag Scan (baseline)","Diff-Corr Lag (baseline)","Global Diff-Corr Curve (baseline)"],
+    }},
+    labels: {{
+      threshold: "threshold",
+      sample: "sample",
+      sampleFilter: "sample filter",
+      metric: "metric",
+      language: "Language",
+    }},
+    placeholders: {{
+      matrixFilter: "Filter sample...",
+      hrFilter: "Type sample keyword...",
+      chooseSample: "Select sample...",
+      all: "all",
+    }},
+    legend: ["ECG(all points)","ECG(filtered)","rPPG(filtered)"],
+    tables: {{
+      overall: ["threshold","n","coverage","MAE","RMSE","MAPE%","Accuracy%","Bias(rPPG-ECG)","MAE(excl. suspects)","RMSE(excl. suspects)","MAPE%(excl. suspects)","Accuracy%(excl. suspects)","ΔMAE(excl.-raw)","ΔAccuracy"],
+      warmup: ["min_sec","n","coverage","MAE","RMSE"],
+      timeToK: ["threshold","K","have/miss","q0","q25","q50","q75","q90","q100"],
+      matrixFirst3: ["sample","n_all","mae_all"],
+      hr: ["sample","n_all","n_used","coverage","ECG mean","rPPG mean","Bias","MAE","RMSE","MAPE%","Accuracy%"],
+      genDomain: ["domain","n","sample_count","group_count","MAE","RMSE","corr","bias","p90_abs_error"],
+      genGroup: ["group_id","group_raw","n","sample_count","MAE","RMSE","corr","bias","p90_abs_error"],
+      genDelta: ["group_id","group_raw","n_base","n_cur","coverage_ratio","MAE_base","MAE_cur","Delta_MAE","RMSE_base","RMSE_cur","Delta_RMSE","corr_base","corr_cur","Delta_corr"],
+      genSample: ["sample","group_id","group_raw","n","MAE","RMSE","corr","bias","p90_abs_error","first_sec"],
+      lagCurve: ["lag","baseline_n","baseline_MAE","baseline_RMSE","current_n","current_MAE","current_RMSE"],
+      lagSample: ["sample","n0","mae_lag0","best_lag","best_mae","best_n","mae_gain","gain_ratio"],
+      lagCommon: ["sample","n_common","best_lag_mae","best_mae","lag0_mae","mae_gain","best_lag_corr","best_corr","lag0_corr","corr_gain"],
+      lagDiff: ["sample","n","lag0_diff_mae","lag0_diff_corr","best_lag_by_diff_corr","best_diff_mae","best_diff_corr","corr_gain"],
+      lagGlobal: ["lag","diff_mae","diff_corr","n"],
+    }},
+    msg: {{
+      suspectSummary: "Suspect samples: {{chips}} (highlighted in tables; overall table also shows MAE/RMSE/Accuracy after excluding them. Accuracy% = max(0, 100 - MAPE%)).",
+      noSuspect: "No suspect samples configured.",
+      noGeneralization: "Generalization CSV not found (you can set --generalization-*-csv).",
+      noLag: "Lag analysis CSV not found (you can set --lag-*-csv).",
+      warmupHit: "For fc>={{thr}}, the earliest point reaching MAE<{{target}} is min_sec={{min_sec}} (MAE={{mae}}, coverage={{coverage}}).",
+      warmupNoHit: "For fc>={{thr}}, MAE<{{target}} was not reached.",
+      genMeta: "Current n={{nCur}} / baseline n={{nBase}} | MAE {{maeCur}} vs {{maeBase}} (Δ{{dMae}}), RMSE {{rmseCur}} vs {{rmseBase}} (Δ{{dRmse}}), corr {{corrCur}} vs {{corrBase}} (Δ{{dCorr}}).",
+      lagMeta: "metric={{metric}} | baseline lag0={{b0}}, best={{bb}}@lag={{bl}} | current lag0={{c0}}, best={{cb}}@lag={{cl}}",
+      pickSample: "Please select a sample.",
+      noPoint: "No valid point for {{sample}} at threshold={{thr}}.",
+      plotMeta: "sample={{sample}} | threshold={{thr}} | n_used={{nUsed}}/{{nAll}} | coverage={{cov}} | MAE={{mae}} | RMSE={{rmse}} | MAPE={{mape}}% | Accuracy={{acc}}{{suspect}}",
+      suspectTag: " | [suspect sample]",
+      worstFmt: "{{sample}} (MAE={{mae}})",
+    }},
+  }},
+  ja: {{
+    langName: "日本語",
+    langLabel: "言語",
+    tocTitle: "目次",
+    tocLinks: ["しきい値概要","可視化サマリ","最短計測時間","K点到達時間","サンプル別行列","ファイル別HR数値","ファイル別HR曲線","汎化分析","ECG-rPPG遅延"],
+    title: "rPPG しきい値とファイル別 HR 比較レポート",
+    subtitle: "入力: 1秒整列CSV。精度・カバレッジ・実用開始時間を同一画面で比較し、まず全体、次にファイル別詳細を確認できます。",
+    kpiLabels: ["最良しきい値","最良 MAE","最良 MAE(疑似除外)","最良 Accuracy","最良しきい値のカバレッジ","公開設定 MAE","公開設定 Accuracy","現行/基準カバレッジ","現行の最悪サンプル"],
+    sectionTitles: {{
+      overall: "全体しきい値比較",
+      visuals: "可視化サマリ",
+      warmup: "最短時間と精度",
+      timeToK: "K個の高信頼点に到達する秒数",
+      matrix: "サンプル別パラメータ行列 (MAE / Coverage)",
+      hrTable: "ファイル別 HR 数値比較",
+      hrPlot: "ファイル別 秒次 HR 曲線",
+      generalization: "汎化分析（現行公開設定 vs ベースライン）",
+      lag: "ECG-rPPG 遅延分析",
+    }},
+    sectionDesc: {{
+      overall: "主要な意思決定表です。しきい値を上げると通常はMAEが改善し、カバレッジは低下します。Accuracy は ECG 基準で max(0, 100 - MAPE%) と定義します。",
+      warmup: "目的: より高精度なHRを得るまでに必要な待機秒数を確認（min_sec + freq_conf の複合ゲート）。",
+      timeToK: "例: q50 は、50%の動画がその秒数までにK点へ到達することを意味します。",
+      matrix: "特定サンプル（例: 003/1-1）で、しきい値別のトレードオフを確認できます。",
+      hrTable: "しきい値適用後、各ファイルの ECG平均 / rPPG平均 / Bias / MAE / RMSE / MAPE% / Accuracy% を表示します。",
+    }},
+    cardTitles: {{
+      visuals: ["全体トレードオフ","サンプル別 MAE ヒートマップ","サンプル別 カバレッジ ヒートマップ"],
+      warmup: ["MAE vs min_sec","Coverage vs min_sec"],
+    }},
+    genCards: ["現行 MAE / RMSE / corr","基準 MAE / RMSE / corr","差分（現行-基準）","カバレッジ"],
+    summaries: {{
+      warmup: "warmup 詳細表を表示",
+      gen: ["ドメイン比較","グループ比較（現行）","ベースライン差分","ワーストサンプル（現行）"],
+      lag: ["遅延曲線（baseline vs current）","サンプル別遅延改善（baseline）","サンプル別遅延改善（current）","固定窓遅延スキャン（baseline）","Diff-Corr 遅延（baseline）","Global Diff-Corr 曲線（baseline）"],
+    }},
+    labels: {{
+      threshold: "threshold",
+      sample: "sample",
+      sampleFilter: "sample フィルタ",
+      metric: "metric",
+      language: "言語",
+    }},
+    placeholders: {{
+      matrixFilter: "sample をフィルタ...",
+      hrFilter: "sample キーワードを入力...",
+      chooseSample: "sample を選択...",
+      all: "all",
+    }},
+    legend: ["ECG(all points)","ECG(filtered)","rPPG(filtered)"],
+    tables: {{
+      overall: ["threshold","n","coverage","MAE","RMSE","MAPE%","Accuracy%","Bias(rPPG-ECG)","MAE(疑似除外)","RMSE(疑似除外)","MAPE%(疑似除外)","Accuracy%(疑似除外)","ΔMAE(除外-元)","ΔAccuracy"],
+      warmup: ["min_sec","n","coverage","MAE","RMSE"],
+      timeToK: ["threshold","K","have/miss","q0","q25","q50","q75","q90","q100"],
+      matrixFirst3: ["sample","n_all","mae_all"],
+      hr: ["sample","n_all","n_used","coverage","ECG平均","rPPG平均","Bias","MAE","RMSE","MAPE%","Accuracy%"],
+      genDomain: ["domain","n","sample_count","group_count","MAE","RMSE","corr","bias","p90_abs_error"],
+      genGroup: ["group_id","group_raw","n","sample_count","MAE","RMSE","corr","bias","p90_abs_error"],
+      genDelta: ["group_id","group_raw","n_base","n_cur","coverage_ratio","MAE_base","MAE_cur","Delta_MAE","RMSE_base","RMSE_cur","Delta_RMSE","corr_base","corr_cur","Delta_corr"],
+      genSample: ["sample","group_id","group_raw","n","MAE","RMSE","corr","bias","p90_abs_error","first_sec"],
+      lagCurve: ["lag","baseline_n","baseline_MAE","baseline_RMSE","current_n","current_MAE","current_RMSE"],
+      lagSample: ["sample","n0","mae_lag0","best_lag","best_mae","best_n","mae_gain","gain_ratio"],
+      lagCommon: ["sample","n_common","best_lag_mae","best_mae","lag0_mae","mae_gain","best_lag_corr","best_corr","lag0_corr","corr_gain"],
+      lagDiff: ["sample","n","lag0_diff_mae","lag0_diff_corr","best_lag_by_diff_corr","best_diff_mae","best_diff_corr","corr_gain"],
+      lagGlobal: ["lag","diff_mae","diff_corr","n"],
+    }},
+    msg: {{
+      suspectSummary: "疑似異常サンプル: {{chips}}（表内でハイライト。全体表では除外後の MAE/RMSE/Accuracy も表示。Accuracy% = max(0, 100 - MAPE%)）。",
+      noSuspect: "疑似異常サンプルは設定されていません。",
+      noGeneralization: "汎化分析CSVが見つかりません（--generalization-*-csv で指定可能）。",
+      noLag: "遅延分析CSVが見つかりません（--lag-*-csv で指定可能）。",
+      warmupHit: "fc>={{thr}} の場合、MAE<{{target}} を最初に満たすのは min_sec={{min_sec}}（MAE={{mae}}, coverage={{coverage}}）です。",
+      warmupNoHit: "fc>={{thr}} では MAE<{{target}} に到達しませんでした。",
+      genMeta: "現行 n={{nCur}} / baseline n={{nBase}} | MAE {{maeCur}} vs {{maeBase}} (Δ{{dMae}}), RMSE {{rmseCur}} vs {{rmseBase}} (Δ{{dRmse}}), corr {{corrCur}} vs {{corrBase}} (Δ{{dCorr}}).",
+      lagMeta: "metric={{metric}} | baseline lag0={{b0}}, best={{bb}}@lag={{bl}} | current lag0={{c0}}, best={{cb}}@lag={{cl}}",
+      pickSample: "sample を選択してください。",
+      noPoint: "{{sample}} は threshold={{thr}} で有効点がありません。",
+      plotMeta: "sample={{sample}} | threshold={{thr}} | n_used={{nUsed}}/{{nAll}} | coverage={{cov}} | MAE={{mae}} | RMSE={{rmse}} | MAPE={{mape}}% | Accuracy={{acc}}{{suspect}}",
+      suspectTag: " | [疑似異常サンプル]",
+      worstFmt: "{{sample}} (MAE={{mae}})",
+    }},
+  }},
+}};
+let currentLang = "zh";
 
 function fmt(v, digits=3) {{
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
@@ -1344,6 +1619,149 @@ function fmtSigned(v, digits=3) {{
 function fmtPercent(v, digits=2) {{
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
   return Number(v).toFixed(digits) + "%";
+}}
+
+function t(path) {{
+  const langPack = I18N[currentLang] || I18N.zh;
+  const fallback = I18N.zh;
+  const walk = (obj, p) => p.split(".").reduce((acc, k) => (acc && acc[k] !== undefined) ? acc[k] : undefined, obj);
+  const v = walk(langPack, path);
+  if (v !== undefined) return v;
+  const fv = walk(fallback, path);
+  return fv !== undefined ? fv : path;
+}}
+
+function tf(path, vars={{}}) {{
+  let s = String(t(path));
+  for (const [k, v] of Object.entries(vars)) {{
+    s = s.replaceAll(`{{${{k}}}}`, String(v));
+  }}
+  return s;
+}}
+
+function setText(el, value) {{
+  if (el) el.textContent = value;
+}}
+
+function setTexts(nodeList, values) {{
+  const arr = Array.from(nodeList || []);
+  for (let i = 0; i < arr.length && i < values.length; i += 1) {{
+    arr[i].textContent = values[i];
+  }}
+}}
+
+function setTableHeaders(selector, texts) {{
+  const ths = Array.from(document.querySelectorAll(`${{selector}} th`));
+  for (let i = 0; i < ths.length && i < texts.length; i += 1) {{
+    ths[i].textContent = texts[i];
+  }}
+}}
+
+function setLabelPrefix(selector, labelText) {{
+  const label = document.querySelector(selector);
+  if (!label) return;
+  const control = label.querySelector("select, input");
+  label.textContent = `${{labelText}}: `;
+  if (control) label.appendChild(control);
+}}
+
+function applyStaticI18n() {{
+  setText(document.getElementById("langLabel"), t("labels.language"));
+  const heroTitle = document.querySelector(".hero h1");
+  setText(heroTitle, t("title"));
+  setText(document.getElementById("pageSubtitle"), t("subtitle"));
+  setText(document.querySelector(".toc-title"), t("tocTitle"));
+  setTexts(document.querySelectorAll(".toc a"), t("tocLinks"));
+  setTexts(document.querySelectorAll(".kpi .k"), t("kpiLabels"));
+
+  setText(document.querySelector("#sec-overall h2"), t("sectionTitles.overall"));
+  setText(document.querySelector("#sec-overall .muted"), t("sectionDesc.overall"));
+  setText(document.querySelector("#sec-visuals h2"), t("sectionTitles.visuals"));
+  setTexts(document.querySelectorAll("#sec-visuals .card .k"), t("cardTitles.visuals"));
+
+  setText(document.querySelector("#sec-warmup h2"), t("sectionTitles.warmup"));
+  setText(document.querySelector("#sec-warmup .muted"), t("sectionDesc.warmup"));
+  setLabelPrefix("#sec-warmup .controls label", t("labels.threshold"));
+  const warmupSummary = document.querySelector("#sec-warmup summary");
+  setText(warmupSummary, t("summaries.warmup"));
+  setTexts(document.querySelectorAll("#sec-warmup .card .k"), t("cardTitles.warmup"));
+
+  setText(document.querySelector("#sec-time-to-k h2"), t("sectionTitles.timeToK"));
+  setText(document.querySelector("#sec-time-to-k .muted"), t("sectionDesc.timeToK"));
+
+  setText(document.querySelector("#sec-matrix h2"), t("sectionTitles.matrix"));
+  setText(document.querySelector("#sec-matrix .muted"), t("sectionDesc.matrix"));
+
+  setText(document.querySelector("#sec-hr-table h2"), t("sectionTitles.hrTable"));
+  setText(document.querySelector("#sec-hr-table .muted"), t("sectionDesc.hrTable"));
+  setLabelPrefix("#sec-hr-table .controls label:nth-child(1)", t("labels.threshold"));
+  setLabelPrefix("#sec-hr-table .controls label:nth-child(2)", t("labels.sampleFilter"));
+
+  setText(document.querySelector("#sec-hr-plot h2"), t("sectionTitles.hrPlot"));
+  setLabelPrefix("#sec-hr-plot .controls label:nth-child(1)", t("labels.sample"));
+  setLabelPrefix("#sec-hr-plot .controls label:nth-child(2)", t("labels.threshold"));
+  setTexts(document.querySelectorAll("#sec-hr-plot .legend > span"), t("legend"));
+
+  setText(document.querySelector("#sec-generalization h2"), t("sectionTitles.generalization"));
+  setTexts(document.querySelectorAll("#sec-generalization details summary"), t("summaries.gen"));
+
+  setText(document.querySelector("#sec-lag h2"), t("sectionTitles.lag"));
+  setLabelPrefix("#sec-lag .controls label", t("labels.metric"));
+  setTexts(document.querySelectorAll("#sec-lag details summary"), t("summaries.lag"));
+
+  const qMatrix = document.getElementById("qMatrix");
+  if (qMatrix) qMatrix.placeholder = t("placeholders.matrixFilter");
+  const qHr = document.getElementById("qHr");
+  if (qHr) qHr.placeholder = t("placeholders.hrFilter");
+
+  const samplePlaceholderOpt = document.querySelector('#plotSample option[value=""]');
+  if (samplePlaceholderOpt) samplePlaceholderOpt.textContent = t("placeholders.chooseSample");
+  document.querySelectorAll('option[value="all"]').forEach(opt => {{
+    opt.textContent = t("placeholders.all");
+  }});
+
+  setTableHeaders("#sec-overall table", t("tables.overall"));
+  setTableHeaders("#warmupTable", t("tables.warmup"));
+  setTableHeaders("#timeToKTable", t("tables.timeToK"));
+  const matrixThs = Array.from(document.querySelectorAll("#matrix thead th"));
+  const m3 = t("tables.matrixFirst3");
+  for (let i = 0; i < matrixThs.length && i < 3; i += 1) matrixThs[i].textContent = m3[i];
+  setTableHeaders("#hrTable", t("tables.hr"));
+  setTableHeaders("#genDomainTable", t("tables.genDomain"));
+  setTableHeaders("#genGroupTable", t("tables.genGroup"));
+  setTableHeaders("#genDeltaTable", t("tables.genDelta"));
+  setTableHeaders("#genSampleTable", t("tables.genSample"));
+  setTableHeaders("#lagCurveTable", t("tables.lagCurve"));
+  setTableHeaders("#lagSampleBaselineTable", t("tables.lagSample"));
+  setTableHeaders("#lagSampleCurrentTable", t("tables.lagSample"));
+  setTableHeaders("#lagCommonWindowTable", t("tables.lagCommon"));
+  setTableHeaders("#lagDiffCorrTable", t("tables.lagDiff"));
+  setTableHeaders("#lagGlobalDiffTable", t("tables.lagGlobal"));
+}}
+
+function detectPreferredLanguage() {{
+  const stored = (localStorage.getItem("rppg_report_lang") || "").toLowerCase();
+  if (stored && I18N[stored]) return stored;
+  const nav = (navigator.language || "en").toLowerCase();
+  if (nav.startsWith("zh")) return "zh";
+  if (nav.startsWith("ja")) return "ja";
+  return "en";
+}}
+
+function setLanguage(lang, persist=true) {{
+  currentLang = I18N[lang] ? lang : "zh";
+  const langSel = document.getElementById("langSelect");
+  if (langSel && langSel.value !== currentLang) langSel.value = currentLang;
+  if (persist) localStorage.setItem("rppg_report_lang", currentLang);
+  applyStaticI18n();
+  renderHrTable();
+  renderWarmup();
+  renderTimeToKTable();
+  renderGeneralization();
+  renderLagAnalysis();
+  updateHeroKpis();
+  filterMatrixRows();
+  drawHrPlot();
 }}
 
 function normalizeSampleId(sample) {{
@@ -1393,15 +1811,15 @@ function updateHeroKpis() {{
   setTxt("kpiPublishedMae", g.mae_cur !== undefined ? fmt(g.mae_cur) : "-");
   setTxt("kpiPublishedAccuracy", published ? fmtPercent(published.accuracy_pct) : "-");
   setTxt("kpiCoverageRatio", (g.n_cur && g.n_base) ? `${{fmtPct(g.n_cur / g.n_base)}} (${{g.n_cur}}/${{g.n_base}})` : "-");
-  setTxt("kpiWorstSample", worst ? `${{worst.sample}} (MAE=${{fmt(worst.mae)}})` : "-");
+  setTxt("kpiWorstSample", worst ? tf("msg.worstFmt", {{ sample: worst.sample, mae: fmt(worst.mae) }}) : "-");
 
   const suspectEl = document.getElementById("suspectSummary");
   if (suspectEl) {{
     if (SUSPECT_SAMPLES.length) {{
       const chips = SUSPECT_SAMPLES.map(s => `<span class="suspect-chip">${{s}}</span>`).join("");
-      suspectEl.innerHTML = `疑似异常样本标记：${{chips}}（在表格中高亮；总体表显示排除这些样本后的 MAE/RMSE/Accuracy。Accuracy% = max(0, 100 - MAPE%)）`;
+      suspectEl.innerHTML = tf("msg.suspectSummary", {{ chips }});
     }} else {{
-      suspectEl.textContent = "未设置疑似异常样本。";
+      suspectEl.textContent = t("msg.noSuspect");
     }}
   }}
 }}
@@ -1533,9 +1951,15 @@ function renderWarmup() {{
   const hit = rows.find(r => Number(r.mae) < 3);
   const meta = document.getElementById("warmupMeta");
   if (hit) {{
-    meta.textContent = `fc>=${{thr}} 时，最早在 min_sec=${{hit.min_sec}} 达到 MAE=${{fmt(hit.mae)}}（coverage=${{fmtPct(hit.coverage)}}）。`;
+    meta.textContent = tf("msg.warmupHit", {{
+      thr,
+      target: "3",
+      min_sec: hit.min_sec,
+      mae: fmt(hit.mae),
+      coverage: fmtPct(hit.coverage),
+    }});
   }} else {{
-    meta.textContent = `fc>=${{thr}} 未达到 MAE<3。`;
+    meta.textContent = tf("msg.warmupNoHit", {{ thr, target: "3" }});
   }}
 }}
 
@@ -1571,7 +1995,7 @@ function renderGeneralization() {{
     (Array.isArray(g.samples) && g.samples.length > 0);
 
   if (!hasAny) {{
-    if (meta) meta.textContent = "未找到泛化分析 CSV（可通过 --generalization-*-csv 指定）。";
+    if (meta) meta.textContent = t("msg.noGeneralization");
     if (cards) cards.innerHTML = "";
     return;
   }}
@@ -1579,19 +2003,28 @@ function renderGeneralization() {{
   const nCur = overview.n_cur;
   const nBase = overview.n_base;
   if (meta) {{
-    meta.textContent =
-      `当前策略 n=${{nCur ?? ""}} / baseline n=${{nBase ?? ""}} | ` +
-      `MAE ${{fmt(overview.mae_cur)}} vs ${{fmt(overview.mae_base)}} (Δ${{fmtSigned(overview.delta_mae)}}), ` +
-      `RMSE ${{fmt(overview.rmse_cur)}} vs ${{fmt(overview.rmse_base)}} (Δ${{fmtSigned(overview.delta_rmse)}}), ` +
-      `corr ${{fmt(overview.corr_cur)}} vs ${{fmt(overview.corr_base)}} (Δ${{fmtSigned(overview.delta_corr)}}).`;
+    meta.textContent = tf("msg.genMeta", {{
+      nCur: nCur ?? "",
+      nBase: nBase ?? "",
+      maeCur: fmt(overview.mae_cur),
+      maeBase: fmt(overview.mae_base),
+      dMae: fmtSigned(overview.delta_mae),
+      rmseCur: fmt(overview.rmse_cur),
+      rmseBase: fmt(overview.rmse_base),
+      dRmse: fmtSigned(overview.delta_rmse),
+      corrCur: fmt(overview.corr_cur),
+      corrBase: fmt(overview.corr_base),
+      dCorr: fmtSigned(overview.delta_corr),
+    }});
   }}
 
   if (cards) {{
+    const cg = t("genCards");
     cards.innerHTML = `
-      <div class="card"><div class="k">Current MAE / RMSE / corr</div><div><b>${{fmt(overview.mae_cur)}}</b> / ${{fmt(overview.rmse_cur)}} / ${{fmt(overview.corr_cur)}}</div></div>
-      <div class="card"><div class="k">Baseline MAE / RMSE / corr</div><div><b>${{fmt(overview.mae_base)}}</b> / ${{fmt(overview.rmse_base)}} / ${{fmt(overview.corr_base)}}</div></div>
-      <div class="card"><div class="k">Delta (Current - Baseline)</div><div><b>${{fmtSigned(overview.delta_mae)}}</b> / ${{fmtSigned(overview.delta_rmse)}} / ${{fmtSigned(overview.delta_corr)}}</div></div>
-      <div class="card"><div class="k">Coverage</div><div><b>${{nCur ?? ""}}</b> / ${{nBase ?? ""}} (${{fmtPct((nCur && nBase) ? nCur / nBase : null)}})</div></div>
+      <div class="card"><div class="k">${{cg[0] || ""}}</div><div><b>${{fmt(overview.mae_cur)}}</b> / ${{fmt(overview.rmse_cur)}} / ${{fmt(overview.corr_cur)}}</div></div>
+      <div class="card"><div class="k">${{cg[1] || ""}}</div><div><b>${{fmt(overview.mae_base)}}</b> / ${{fmt(overview.rmse_base)}} / ${{fmt(overview.corr_base)}}</div></div>
+      <div class="card"><div class="k">${{cg[2] || ""}}</div><div><b>${{fmtSigned(overview.delta_mae)}}</b> / ${{fmtSigned(overview.delta_rmse)}} / ${{fmtSigned(overview.delta_corr)}}</div></div>
+      <div class="card"><div class="k">${{cg[3] || ""}}</div><div><b>${{nCur ?? ""}}</b> / ${{nBase ?? ""}} (${{fmtPct((nCur && nBase) ? nCur / nBase : null)}})</div></div>
     `;
   }}
 
@@ -1733,7 +2166,7 @@ function renderLagAnalysis() {{
   const meta = document.getElementById("lagMeta");
 
   if (!base.length && !cur.length) {{
-    if (meta) meta.textContent = "未找到 lag 分析 CSV（可通过 --lag-*-csv 指定）。";
+    if (meta) meta.textContent = t("msg.noLag");
     return;
   }}
 
@@ -1752,9 +2185,15 @@ function renderLagAnalysis() {{
   const baseBest = pickMin(base);
   const curBest = pickMin(cur);
   if (meta) {{
-    meta.textContent =
-      `metric=${{metricKey.toUpperCase()}} | baseline lag0=${{base0 ? fmt(base0[metricKey]) : ""}}, best=${{baseBest ? fmt(baseBest[metricKey]) : ""}}@lag=${{baseBest ? baseBest.lag : ""}} | ` +
-      `current lag0=${{cur0 ? fmt(cur0[metricKey]) : ""}}, best=${{curBest ? fmt(curBest[metricKey]) : ""}}@lag=${{curBest ? curBest.lag : ""}}`;
+    meta.textContent = tf("msg.lagMeta", {{
+      metric: metricKey.toUpperCase(),
+      b0: base0 ? fmt(base0[metricKey]) : "",
+      bb: baseBest ? fmt(baseBest[metricKey]) : "",
+      bl: baseBest ? baseBest.lag : "",
+      c0: cur0 ? fmt(cur0[metricKey]) : "",
+      cb: curBest ? fmt(curBest[metricKey]) : "",
+      cl: curBest ? curBest.lag : "",
+    }});
   }}
 
   const curveMap = new Map();
@@ -1908,7 +2347,7 @@ function drawHrPlot() {{
   const meta = document.getElementById("plotMeta");
   if (!sample || !SERIES_DATA[sample]) {{
     svg.innerHTML = "";
-    meta.textContent = "请选择一个 sample。";
+    meta.textContent = t("msg.pickSample");
     return;
   }}
 
@@ -1926,7 +2365,7 @@ function drawHrPlot() {{
 
   if (!idx.length) {{
     svg.innerHTML = "";
-    meta.textContent = `${{sample}} 在 threshold=${{thr}} 下没有可用点。`;
+    meta.textContent = tf("msg.noPoint", {{ sample, thr }});
     return;
   }}
 
@@ -1977,23 +2416,35 @@ function drawHrPlot() {{
   const sampleObj = SAMPLE_STATS.find(x => x.sample === sample);
   const st = sampleObj && sampleObj.stats ? sampleObj.stats[thr] : null;
   const nAll = sampleObj ? sampleObj.n_all : sec.length;
-  const suspectNote = isSuspectSample(sample) ? " | [疑似异常样本]" : "";
-  meta.textContent = `sample=${{sample}} | threshold=${{thr}} | n_used=${{st ? st.n : idx.length}}/${{nAll}} | coverage=${{st ? fmtPct(st.coverage) : ''}} | MAE=${{st ? fmt(st.mae) : ''}} | RMSE=${{st ? fmt(st.rmse) : ''}} | MAPE=${{st ? fmt(st.mape_pct) : ''}}% | Accuracy=${{st ? fmtPercent(st.accuracy_pct) : ''}}${{suspectNote}}`;
+  const suspectNote = isSuspectSample(sample) ? t("msg.suspectTag") : "";
+  meta.textContent = tf("msg.plotMeta", {{
+    sample,
+    thr,
+    nUsed: st ? st.n : idx.length,
+    nAll,
+    cov: st ? fmtPct(st.coverage) : "",
+    mae: st ? fmt(st.mae) : "",
+    rmse: st ? fmt(st.rmse) : "",
+    mape: st ? fmt(st.mape_pct) : "",
+    acc: st ? fmtPercent(st.accuracy_pct) : "",
+    suspect: suspectNote,
+  }});
+}}
+function initLanguageSelector() {{
+  const sel = document.getElementById("langSelect");
+  if (!sel) return;
+  sel.onchange = (e) => setLanguage(e.target.value, true);
 }}
 
-renderHrTable();
-renderWarmup();
-renderTimeToKTable();
-renderGeneralization();
-renderLagAnalysis();
-updateHeroKpis();
-initTocHighlight();
-filterMatrixRows();
 (() => {{
   const first = document.getElementById("plotSample");
   if (first && first.options.length > 1) {{
     first.selectedIndex = 1;
   }}
+  initTocHighlight();
+  initLanguageSelector();
+  setLanguage(detectPreferredLanguage(), false);
+  filterMatrixRows();
   syncPlotThreshold();
 }})();
 </script>
