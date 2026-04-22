@@ -14,6 +14,10 @@ import pandas as pd
 
 
 DEFAULT_THRESHOLDS = [0.80, 0.82, 0.84, 0.86, 0.88, 0.90, 0.92, 0.94]
+WARMUP_MIN_SECS = [5, 8, 10, 12, 15, 18, 20, 25, 30, 35, 40, 50, 60]
+WARMUP_THRESHOLDS = [0.80, 0.85, 0.88, 0.90, 0.92]
+TIME_TO_K_THRESHOLDS = [0.88, 0.90, 0.92]
+TIME_TO_K_KS = [1, 3, 5, 10]
 DATA_PATH_RE = re.compile(r"/Data/([^/]+)/video/([^/.]+)")
 
 
@@ -40,6 +44,16 @@ def _parse_args() -> argparse.Namespace:
         "--per-file-hr-csv-out",
         default="results/parameter_compare_per_file_hr_values_long.csv",
         help="Output per-file HR comparison (long format).",
+    )
+    parser.add_argument(
+        "--warmup-csv-out",
+        default="results/parameter_compare_warmup_time_fc.csv",
+        help="Output warmup time-vs-accuracy matrix.",
+    )
+    parser.add_argument(
+        "--time-to-k-csv-out",
+        default="results/parameter_compare_time_to_k_fc.csv",
+        help="Output time-to-k high-confidence points distribution.",
     )
     parser.add_argument(
         "--html-out",
@@ -184,6 +198,83 @@ def _compute_overall_rows(
     return rows
 
 
+def _compute_warmup_rows(
+    df: pd.DataFrame, min_secs: List[int], thresholds: List[float]
+) -> List[Dict[str, float]]:
+    total_n = len(df)
+    rows: List[Dict[str, float]] = []
+    for min_sec in min_secs:
+        dft = df[df["sec"] >= min_sec]
+        for thr in thresholds:
+            sel = dft[dft["frequency_confidence"] >= thr]
+            n = len(sel)
+            coverage = float(n) / float(total_n) if total_n > 0 else math.nan
+            if n > 0:
+                diff = sel["hr_best"] - sel["ecg_hr"]
+                mae = float(diff.abs().mean())
+                rmse = float(np.sqrt((diff ** 2).mean()))
+            else:
+                mae = math.nan
+                rmse = math.nan
+            rows.append(
+                {
+                    "min_sec": int(min_sec),
+                    "threshold": float(thr),
+                    "n": int(n),
+                    "coverage": coverage,
+                    "mae": mae,
+                    "rmse": rmse,
+                }
+            )
+    return rows
+
+
+def _compute_time_to_k_rows(
+    df: pd.DataFrame, thresholds: List[float], ks: List[int]
+) -> List[Dict[str, float]]:
+    all_samples = sorted(df["sample"].unique().tolist())
+    total_samples = len(all_samples)
+    quantiles = [0.0, 0.25, 0.5, 0.75, 0.9, 1.0]
+    rows: List[Dict[str, float]] = []
+
+    for thr in thresholds:
+        dthr = df[df["frequency_confidence"] >= thr]
+        sample_secs: Dict[str, List[int]] = {}
+        for sample, g in dthr.groupby("sample", sort=True):
+            secs = sorted(g["sec"].astype(int).tolist())
+            sample_secs[sample] = secs
+
+        for k in ks:
+            vals: List[float] = []
+            for sample in all_samples:
+                secs = sample_secs.get(sample, [])
+                if len(secs) >= k:
+                    vals.append(float(secs[k - 1]))
+
+            have = len(vals)
+            missing = total_samples - have
+            if have > 0:
+                qv = np.quantile(vals, quantiles)
+            else:
+                qv = np.array([math.nan] * len(quantiles), dtype=float)
+
+            rows.append(
+                {
+                    "threshold": float(thr),
+                    "k": int(k),
+                    "have": int(have),
+                    "missing": int(missing),
+                    "q0": float(qv[0]) if np.isfinite(qv[0]) else math.nan,
+                    "q25": float(qv[1]) if np.isfinite(qv[1]) else math.nan,
+                    "q50": float(qv[2]) if np.isfinite(qv[2]) else math.nan,
+                    "q75": float(qv[3]) if np.isfinite(qv[3]) else math.nan,
+                    "q90": float(qv[4]) if np.isfinite(qv[4]) else math.nan,
+                    "q100": float(qv[5]) if np.isfinite(qv[5]) else math.nan,
+                }
+            )
+    return rows
+
+
 def _build_sample_stats_json(
     stats_long: pd.DataFrame, thresholds: List[float]
 ) -> str:
@@ -234,6 +325,9 @@ def _render_html(
     overall_rows: List[Dict[str, float]],
     matrix_wide: pd.DataFrame,
     thresholds: List[float],
+    warmup_rows: List[Dict[str, float]],
+    time_to_k_rows: List[Dict[str, float]],
+    warmup_thresholds: List[float],
     sample_stats_json: str,
     series_json: str,
 ) -> str:
@@ -292,6 +386,9 @@ def _render_html(
         )
     )
     threshold_js = json.dumps([f"{thr:.2f}" for thr in thresholds], ensure_ascii=False)
+    warmup_json = json.dumps(warmup_rows, ensure_ascii=False, separators=(",", ":"))
+    time_to_k_json = json.dumps(time_to_k_rows, ensure_ascii=False, separators=(",", ":"))
+    warmup_threshold_js = json.dumps([f"{thr:.2f}" for thr in warmup_thresholds], ensure_ascii=False)
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -341,6 +438,45 @@ input[type="text"], select {{ border:1px solid #d1d5db; border-radius:8px; paddi
     <div class="card"><div class="k">每样本 MAE 热力图</div><img src="fc_threshold_mae_heatmap_per_sample.png" alt="mae heatmap"/></div>
     <div class="card"><div class="k">每样本覆盖率热力图</div><img src="fc_threshold_coverage_heatmap_per_sample.png" alt="coverage heatmap"/></div>
   </div>
+</div>
+
+<div class="section">
+  <h2>最短时间与精度可视化</h2>
+  <div class="muted">目标：看“等待多少秒”能拿到更高精度的 HR。这里按 min_sec 和 freq_conf 阈值联合统计 MAE/覆盖率。</div>
+  <div class="controls">
+    <label>threshold:
+      <select id="warmupThreshold" onchange="renderWarmup()">
+        {"".join([f'<option value="{thr:.2f}">{thr:.2f}</option>' for thr in warmup_thresholds])}
+      </select>
+    </label>
+  </div>
+  <div id="warmupMeta" class="muted"></div>
+  <div class="grid">
+    <div class="card">
+      <div class="k">MAE vs min_sec</div>
+      <div class="plot-wrap"><svg id="warmupMaePlot" width="560" height="300" viewBox="0 0 560 300"></svg></div>
+    </div>
+    <div class="card">
+      <div class="k">Coverage vs min_sec</div>
+      <div class="plot-wrap"><svg id="warmupCovPlot" width="560" height="300" viewBox="0 0 560 300"></svg></div>
+    </div>
+  </div>
+  <div class="table-wrap"><table id="warmupTable">
+    <thead><tr><th>min_sec</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</div>
+
+<div class="section">
+  <h2>达到 K 个高置信点所需秒数（按视频分布）</h2>
+  <div class="muted">每个单元是分位数秒数；例如 `q50` 表示 50% 视频在该秒数前可拿到 K 个高置信点。</div>
+  <div class="table-wrap"><table id="timeToKTable">
+    <thead><tr>
+      <th>threshold</th><th>K</th><th>have/miss</th>
+      <th>q0</th><th>q25</th><th>q50</th><th>q75</th><th>q90</th><th>q100</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
 </div>
 
 <div class="section">
@@ -405,6 +541,9 @@ input[type="text"], select {{ border:1px solid #d1d5db; border-radius:8px; paddi
 const SAMPLE_STATS = {sample_stats_json};
 const SERIES_DATA = {series_json};
 const THRESHOLDS = {threshold_js};
+const WARMUP_ROWS = {warmup_json};
+const TIME_TO_K_ROWS = {time_to_k_json};
+const WARMUP_THRESHOLDS = {warmup_threshold_js};
 
 function fmt(v, digits=3) {{
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
@@ -427,6 +566,121 @@ function filterMatrixRows() {{
 
 function getThresholdKey(id) {{
   return document.getElementById(id).value || "all";
+}}
+
+function drawLinePlot(svgId, points, key, color, yLabel, yAsPct=false) {{
+  const svg = document.getElementById(svgId);
+  if (!svg || !points.length) {{
+    if (svg) svg.innerHTML = "";
+    return;
+  }}
+  const w = 560, h = 300;
+  const ml = 48, mr = 18, mt = 12, mb = 34;
+  const xVals = points.map(p => Number(p.min_sec));
+  const yVals = points.map(p => Number(p[key]));
+  const xMin = Math.min(...xVals);
+  const xMax = Math.max(...xVals);
+  const xSpan = Math.max(1, xMax - xMin);
+  let yMin = Math.min(...yVals);
+  let yMax = Math.max(...yVals);
+  if (yAsPct) {{
+    yMin = 0;
+    yMax = Math.max(1, yMax * 1.05);
+  }} else {{
+    const pad = Math.max(0.2, (yMax - yMin) * 0.15);
+    yMin = Math.max(0, yMin - pad);
+    yMax = yMax + pad;
+  }}
+  const ySpan = Math.max(1e-9, yMax - yMin);
+
+  const xFn = x => ml + (w - ml - mr) * (x - xMin) / xSpan;
+  const yFn = y => mt + (h - mt - mb) * (1 - (y - yMin) / ySpan);
+
+  let path = "";
+  for (let i = 0; i < points.length; i += 1) {{
+    const x = xFn(Number(points[i].min_sec)).toFixed(2);
+    const y = yFn(Number(points[i][key])).toFixed(2);
+    path += (i === 0 ? `M ${{x}} ${{y}}` : ` L ${{x}} ${{y}}`);
+  }}
+
+  const grid = [];
+  for (let i = 0; i <= 5; i += 1) {{
+    const yy = mt + (h - mt - mb) * i / 5;
+    const val = yMax - (ySpan * i / 5);
+    const label = yAsPct ? `${{(val * 100).toFixed(0)}}%` : val.toFixed(2);
+    grid.push(`<line x1="${{ml}}" y1="${{yy.toFixed(2)}}" x2="${{w - mr}}" y2="${{yy.toFixed(2)}}" stroke="#eef2f7" stroke-width="1"/>`);
+    grid.push(`<text x="${{ml - 8}}" y="${{(yy + 4).toFixed(2)}}" text-anchor="end" class="axis-label">${{label}}</text>`);
+  }}
+
+  const xTicks = points.map(p => Number(p.min_sec));
+  const xTickHtml = xTicks.map(v => {{
+    const xx = xFn(v).toFixed(2);
+    return `<text x="${{xx}}" y="${{h - 12}}" text-anchor="middle" class="axis-label">${{v}}</text>`;
+  }}).join("");
+
+  const dots = points.map(p => {{
+    const xx = xFn(Number(p.min_sec)).toFixed(2);
+    const yy = yFn(Number(p[key])).toFixed(2);
+    return `<circle cx="${{xx}}" cy="${{yy}}" r="3.2" fill="${{color}}" />`;
+  }}).join("");
+
+  svg.innerHTML = `
+    <rect x="0" y="0" width="${{w}}" height="${{h}}" fill="#fff"/>
+    ${{grid.join("")}}
+    <line x1="${{ml}}" y1="${{h - mb}}" x2="${{w - mr}}" y2="${{h - mb}}" stroke="#9ca3af"/>
+    <line x1="${{ml}}" y1="${{mt}}" x2="${{ml}}" y2="${{h - mb}}" stroke="#9ca3af"/>
+    <text x="${{w / 2}}" y="${{h - 5}}" text-anchor="middle" class="axis-label">min_sec</text>
+    <text x="14" y="${{h / 2}}" text-anchor="middle" class="axis-label" transform="rotate(-90 14 ${{h/2}})">${{yLabel}}</text>
+    <path d="${{path}}" fill="none" stroke="${{color}}" stroke-width="2"/>
+    ${{dots}}
+    ${{xTickHtml}}
+  `;
+}}
+
+function renderWarmup() {{
+  const thr = document.getElementById("warmupThreshold").value;
+  const rows = WARMUP_ROWS
+    .filter(r => Number(r.threshold).toFixed(2) === thr)
+    .sort((a, b) => Number(a.min_sec) - Number(b.min_sec));
+
+  drawLinePlot("warmupMaePlot", rows, "mae", "#ea580c", "MAE");
+  drawLinePlot("warmupCovPlot", rows, "coverage", "#2563eb", "Coverage", true);
+
+  const tbody = document.querySelector("#warmupTable tbody");
+  tbody.innerHTML = rows.map(r => `<tr>
+    <td>${{r.min_sec}}</td>
+    <td>${{r.n}}</td>
+    <td>${{fmtPct(r.coverage)}}</td>
+    <td>${{fmt(r.mae)}}</td>
+    <td>${{fmt(r.rmse)}}</td>
+  </tr>`).join("");
+
+  const hit = rows.find(r => Number(r.mae) < 3);
+  const meta = document.getElementById("warmupMeta");
+  if (hit) {{
+    meta.textContent = `fc>=${{thr}} 时，最早在 min_sec=${{hit.min_sec}} 达到 MAE=${{fmt(hit.mae)}}（coverage=${{fmtPct(hit.coverage)}}）。`;
+  }} else {{
+    meta.textContent = `fc>=${{thr}} 未达到 MAE<3。`;
+  }}
+}}
+
+function renderTimeToKTable() {{
+  const tbody = document.querySelector("#timeToKTable tbody");
+  const rows = TIME_TO_K_ROWS
+    .slice()
+    .sort((a, b) => Number(a.threshold) - Number(b.threshold) || Number(a.k) - Number(b.k));
+
+  tbody.innerHTML = rows.map(r => `<tr>
+    <td>${{Number(r.threshold).toFixed(2)}}</td>
+    <td>${{r.k}}</td>
+    <td>${{r.have}}/${{r.missing}}</td>
+    <td>${{fmt(r.q0, 1)}}</td>
+    <td>${{fmt(r.q25, 1)}}</td>
+    <td><b>${{fmt(r.q50, 1)}}</b></td>
+    <td>${{fmt(r.q75, 1)}}</td>
+    <td>${{fmt(r.q90, 1)}}</td>
+    <td>${{fmt(r.q100, 1)}}</td>
+  </tr>`).join("");
 }}
 
 function renderHrTable() {{
@@ -566,6 +820,8 @@ function drawHrPlot() {{
 }}
 
 renderHrTable();
+renderWarmup();
+renderTimeToKTable();
 filterMatrixRows();
 (() => {{
   const first = document.getElementById("plotSample");
@@ -590,6 +846,8 @@ def main() -> None:
     matrix_csv_out = Path(args.matrix_csv_out)
     matrix_long_csv_out = Path(args.matrix_long_csv_out)
     per_file_hr_csv_out = Path(args.per_file_hr_csv_out)
+    warmup_csv_out = Path(args.warmup_csv_out)
+    time_to_k_csv_out = Path(args.time_to_k_csv_out)
     html_out = Path(args.html_out)
 
     raw = pd.read_csv(comparison_csv)
@@ -604,13 +862,24 @@ def main() -> None:
     stats_long = _compute_stats_table(df, thresholds)
     matrix_wide = _build_wide_matrix(stats_long, thresholds)
     overall_rows = _compute_overall_rows(df, thresholds)
+    warmup_rows = _compute_warmup_rows(df, WARMUP_MIN_SECS, WARMUP_THRESHOLDS)
+    time_to_k_rows = _compute_time_to_k_rows(df, TIME_TO_K_THRESHOLDS, TIME_TO_K_KS)
 
-    for out in [matrix_csv_out, matrix_long_csv_out, per_file_hr_csv_out, html_out]:
+    for out in [
+        matrix_csv_out,
+        matrix_long_csv_out,
+        per_file_hr_csv_out,
+        warmup_csv_out,
+        time_to_k_csv_out,
+        html_out,
+    ]:
         out.parent.mkdir(parents=True, exist_ok=True)
 
     matrix_wide.to_csv(matrix_csv_out, index=False)
     stats_long.to_csv(matrix_long_csv_out, index=False)
     stats_long.to_csv(per_file_hr_csv_out, index=False)
+    pd.DataFrame.from_records(warmup_rows).to_csv(warmup_csv_out, index=False)
+    pd.DataFrame.from_records(time_to_k_rows).to_csv(time_to_k_csv_out, index=False)
 
     sample_stats_json = _build_sample_stats_json(stats_long, thresholds)
     series_json = _build_series_json(df)
@@ -618,6 +887,9 @@ def main() -> None:
         overall_rows=overall_rows,
         matrix_wide=matrix_wide,
         thresholds=thresholds,
+        warmup_rows=warmup_rows,
+        time_to_k_rows=time_to_k_rows,
+        warmup_thresholds=WARMUP_THRESHOLDS,
         sample_stats_json=sample_stats_json,
         series_json=series_json,
     )
@@ -626,6 +898,8 @@ def main() -> None:
     print(f"[OK] matrix wide: {matrix_csv_out}")
     print(f"[OK] matrix long: {matrix_long_csv_out}")
     print(f"[OK] per-file hr: {per_file_hr_csv_out}")
+    print(f"[OK] warmup time: {warmup_csv_out}")
+    print(f"[OK] time to k: {time_to_k_csv_out}")
     print(f"[OK] html report: {html_out}")
 
 
