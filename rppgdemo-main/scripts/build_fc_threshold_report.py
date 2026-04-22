@@ -762,6 +762,7 @@ def _render_html(
         )
     )
     threshold_js = json.dumps([f"{thr:.2f}" for thr in thresholds], ensure_ascii=False)
+    overall_json = json.dumps(overall_rows, ensure_ascii=False, separators=(",", ":"))
     warmup_json = json.dumps(warmup_rows, ensure_ascii=False, separators=(",", ":"))
     time_to_k_json = json.dumps(time_to_k_rows, ensure_ascii=False, separators=(",", ":"))
     warmup_threshold_js = json.dumps([f"{thr:.2f}" for thr in warmup_thresholds], ensure_ascii=False)
@@ -773,246 +774,467 @@ def _render_html(
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>rPPG 参数阈值与逐文件 HR 对比报告</title>
 <style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 24px; color:#1f2937; }}
-h1,h2 {{ margin: 0 0 12px; }}
-.section {{ margin: 20px 0 28px; }}
-.muted {{ color:#6b7280; font-size: 13px; }}
-.grid {{ display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:12px; margin: 10px 0 16px; }}
-.card {{ border:1px solid #e5e7eb; border-radius:10px; padding:12px; background:#fff; }}
-.card .k {{ font-size:12px; color:#6b7280; }}
-.table-wrap {{ overflow: auto; max-height: 68vh; border:1px solid #e5e7eb; border-radius:10px; }}
-table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
-th, td {{ border: 1px solid #e5e7eb; padding: 6px 8px; text-align: right; white-space: nowrap; }}
-th {{ background: #f8fafc; position: sticky; top: 0; z-index: 2; }}
-td:first-child, th:first-child {{ text-align: left; position: sticky; left: 0; background: #fff; z-index: 3; }}
-img {{ max-width: 100%; border:1px solid #e5e7eb; border-radius:10px; }}
-.badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; background:#eff6ff; color:#1d4ed8; }}
-input[type="text"], select {{ border:1px solid #d1d5db; border-radius:8px; padding:8px 10px; font-size: 13px; }}
-.controls {{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:8px 0 10px; }}
-.controls label {{ font-size:13px; color:#374151; }}
-.plot-wrap {{ border:1px solid #e5e7eb; border-radius:10px; padding:12px; background:#fff; overflow:auto; }}
-.legend {{ display:flex; gap:14px; margin:8px 0; font-size:12px; color:#4b5563; }}
+:root {{
+  --bg:#f2f7f8;
+  --panel:#ffffff;
+  --line:#d6e1e5;
+  --ink:#112531;
+  --muted:#5b6f7a;
+  --accent:#0f766e;
+  --accent-2:#d97706;
+  --accent-soft:#e8f7f5;
+  --radius:14px;
+  --shadow:0 12px 30px rgba(15, 23, 42, 0.08);
+}}
+* {{ box-sizing:border-box; }}
+html {{ scroll-behavior:smooth; }}
+body {{
+  margin:0;
+  color:var(--ink);
+  font-family:"IBM Plex Sans","Source Han Sans SC","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  background:
+    radial-gradient(circle at 12% 3%, #dff1ed 0, transparent 28%),
+    radial-gradient(circle at 90% 1%, #fbeed7 0, transparent 24%),
+    linear-gradient(180deg, #edf4f7 0%, #f7fbfc 40%, #edf2f7 100%);
+}}
+h1,h2,h3 {{ margin:0 0 12px; line-height:1.25; }}
+h1 {{ font-size:28px; letter-spacing:0.2px; }}
+h2 {{ font-size:20px; }}
+h3 {{ font-size:15px; color:#1f3340; margin-top:14px; }}
+.muted {{ color:var(--muted); font-size:13px; line-height:1.55; }}
+.page-shell {{
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 20px;
+  display:grid;
+  grid-template-columns: 250px 1fr;
+  gap: 16px;
+}}
+.content {{ min-width:0; }}
+.panel {{
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}}
+.toc {{
+  position: sticky;
+  top: 14px;
+  align-self: start;
+  padding: 14px;
+  max-height: calc(100vh - 28px);
+  overflow:auto;
+}}
+.toc-title {{
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}}
+.toc a {{
+  display:block;
+  text-decoration:none;
+  color:#1e3a45;
+  padding:8px 10px;
+  border-radius:9px;
+  font-size:13px;
+  margin-bottom:4px;
+}}
+.toc a:hover {{ background:#eef7f8; color:var(--accent); }}
+.hero {{
+  padding: 18px 18px 14px;
+  margin-bottom: 14px;
+  background:
+    linear-gradient(130deg, rgba(15,118,110,0.07), rgba(217,119,6,0.07)),
+    var(--panel);
+}}
+.kpi-grid {{
+  margin-top:12px;
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap:10px;
+}}
+.kpi {{
+  border:1px solid #cfe1e6;
+  border-radius:12px;
+  padding:10px 12px;
+  background:#fcfefe;
+}}
+.kpi .k {{ font-size:12px; color:var(--muted); margin-bottom:3px; }}
+.kpi .v {{ font-size:20px; font-weight:700; letter-spacing:0.2px; color:#123342; }}
+.section {{ margin: 0 0 14px; padding:16px; }}
+.section h2 {{ border-left:4px solid var(--accent); padding-left:10px; }}
+.grid {{ display:grid; grid-template-columns: repeat(auto-fit,minmax(250px,1fr)); gap:12px; margin: 10px 0 14px; }}
+.card {{ border:1px solid #d5e4e9; border-radius:12px; padding:12px; background:#ffffff; }}
+.card .k {{ font-size:12px; color:var(--muted); }}
+.table-wrap {{
+  overflow:auto;
+  max-height:58vh;
+  border:1px solid #d6e1e5;
+  border-radius:12px;
+  background:#fff;
+}}
+table {{ border-collapse:separate; border-spacing:0; width:100%; font-size:12px; }}
+th, td {{
+  border-bottom: 1px solid #e3ecef;
+  border-right: 1px solid #eef4f6;
+  padding: 7px 8px;
+  text-align:right;
+  white-space:nowrap;
+}}
+th {{
+  background:#f3f9fa;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color:#234250;
+  font-weight:600;
+}}
+tbody tr:nth-child(even) td {{ background:#fbfdfe; }}
+tbody tr:hover td {{ background:#eaf6f4; }}
+td:first-child, th:first-child {{
+  text-align:left;
+  position:sticky;
+  left:0;
+  z-index:3;
+}}
+th:first-child {{ background:#edf7f8; }}
+td:first-child {{ background:inherit; font-weight:500; }}
+img {{
+  max-width:100%;
+  border:1px solid #d5e3e8;
+  border-radius:12px;
+  background:#fff;
+}}
+.badge {{
+  display:inline-block;
+  padding:2px 8px;
+  border-radius:999px;
+  font-size:11px;
+  background:var(--accent-soft);
+  color:var(--accent);
+}}
+input[type="text"], select {{
+  border:1px solid #bfd3da;
+  border-radius:10px;
+  padding:8px 10px;
+  font-size:13px;
+  color:#1f3340;
+  background:#fff;
+}}
+.controls {{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  align-items:center;
+  margin:8px 0 10px;
+}}
+.controls label {{ font-size:13px; color:#2e4a57; }}
+.plot-wrap {{
+  border:1px solid #d7e2e7;
+  border-radius:12px;
+  padding:12px;
+  background:#fff;
+  overflow:auto;
+}}
+.legend {{ display:flex; flex-wrap:wrap; gap:14px; margin:8px 0; font-size:12px; color:#47616e; }}
 .dot {{ display:inline-block; width:10px; height:10px; border-radius:999px; margin-right:4px; }}
-.axis-label {{ font-size:11px; fill:#6b7280; }}
+.axis-label {{ font-size:11px; fill:#5c7581; }}
+.fold {{ margin-top:10px; }}
+.fold > summary {{
+  cursor:pointer;
+  font-size:13px;
+  color:#21596a;
+  font-weight:600;
+  padding:6px 2px 10px;
+}}
+@media (max-width: 1120px) {{
+  .page-shell {{ grid-template-columns: 1fr; }}
+  .toc {{
+    position: static;
+    display:flex;
+    gap:6px;
+    white-space:nowrap;
+    overflow:auto;
+    padding:10px;
+  }}
+  .toc-title {{ display:none; }}
+  .toc a {{ margin:0; background:#f4fafb; border:1px solid #d8e6ea; }}
+}}
 </style>
 </head>
 <body>
-<h1>rPPG 参数阈值与逐文件 HR 对比报告（HTML）</h1>
-<div class="muted">输入：逐秒对齐 CSV；阈值：freq_conf（0.80~0.94）；支持逐文件 HR 数值和曲线对比。</div>
+<div class="page-shell">
+  <aside class="toc panel">
+    <div class="toc-title">目录</div>
+    <a href="#sec-overall">阈值总览</a>
+    <a href="#sec-visuals">图形速览</a>
+    <a href="#sec-warmup">最短等待时间</a>
+    <a href="#sec-time-to-k">达到 K 点时间</a>
+    <a href="#sec-matrix">逐样本矩阵</a>
+    <a href="#sec-hr-table">每文件 HR 数值</a>
+    <a href="#sec-hr-plot">每文件 HR 曲线</a>
+    <a href="#sec-generalization">泛化分析</a>
+    <a href="#sec-lag">ECG-rPPG 位移</a>
+  </aside>
 
-<div class="section">
-  <h2>总体阈值对比</h2>
-  <div class="table-wrap"><table><thead><tr><th>threshold</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th><th>Bias(rPPG-ECG)</th></tr></thead><tbody>
-  {"".join(overall_html_rows)}
-  </tbody></table></div>
-</div>
+  <main class="content">
+    <header class="hero panel">
+      <h1>rPPG 参数阈值与逐文件 HR 对比报告</h1>
+      <div class="muted">
+        输入：逐秒对齐 CSV。主目标是把“准确度 / 覆盖率 / 可用速度”同时放在同一页中对比，先看顶层结论，再下钻到单文件。
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="k">最佳阈值</div><div class="v" id="kpiBestThreshold">-</div></div>
+        <div class="kpi"><div class="k">最佳 MAE</div><div class="v" id="kpiBestMae">-</div></div>
+        <div class="kpi"><div class="k">该阈值覆盖率</div><div class="v" id="kpiBestCoverage">-</div></div>
+        <div class="kpi"><div class="k">当前发布 MAE</div><div class="v" id="kpiPublishedMae">-</div></div>
+        <div class="kpi"><div class="k">当前/基线覆盖</div><div class="v" id="kpiCoverageRatio">-</div></div>
+        <div class="kpi"><div class="k">当前最差样本</div><div class="v" id="kpiWorstSample">-</div></div>
+      </div>
+    </header>
 
-<div class="section">
-  <h2>可视化图</h2>
-  <div class="grid">
-    <div class="card"><div class="k">总体权衡</div><img src="fc_threshold_tradeoff_overall.png" alt="tradeoff"/></div>
-    <div class="card"><div class="k">每样本 MAE 热力图</div><img src="fc_threshold_mae_heatmap_per_sample.png" alt="mae heatmap"/></div>
-    <div class="card"><div class="k">每样本覆盖率热力图</div><img src="fc_threshold_coverage_heatmap_per_sample.png" alt="coverage heatmap"/></div>
-  </div>
-</div>
+    <section class="section panel" id="sec-overall">
+      <h2>总体阈值对比</h2>
+      <div class="muted">这是参数决策入口：阈值越高，通常 MAE 更好但覆盖率更低。</div>
+      <div class="table-wrap"><table><thead><tr><th>threshold</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th><th>Bias(rPPG-ECG)</th></tr></thead><tbody>
+      {"".join(overall_html_rows)}
+      </tbody></table></div>
+    </section>
 
-<div class="section">
-  <h2>最短时间与精度可视化</h2>
-  <div class="muted">目标：看“等待多少秒”能拿到更高精度的 HR。这里按 min_sec 和 freq_conf 阈值联合统计 MAE/覆盖率。</div>
-  <div class="controls">
-    <label>threshold:
-      <select id="warmupThreshold" onchange="renderWarmup()">
-        {"".join([f'<option value="{thr:.2f}">{thr:.2f}</option>' for thr in warmup_thresholds])}
-      </select>
-    </label>
-  </div>
-  <div id="warmupMeta" class="muted"></div>
-  <div class="grid">
-    <div class="card">
-      <div class="k">MAE vs min_sec</div>
-      <div class="plot-wrap"><svg id="warmupMaePlot" width="560" height="300" viewBox="0 0 560 300"></svg></div>
-    </div>
-    <div class="card">
-      <div class="k">Coverage vs min_sec</div>
-      <div class="plot-wrap"><svg id="warmupCovPlot" width="560" height="300" viewBox="0 0 560 300"></svg></div>
-    </div>
-  </div>
-  <div class="table-wrap"><table id="warmupTable">
-    <thead><tr><th>min_sec</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
-</div>
+    <section class="section panel" id="sec-visuals">
+      <h2>图形速览</h2>
+      <div class="grid">
+        <div class="card"><div class="k">总体权衡</div><img src="fc_threshold_tradeoff_overall.png" alt="tradeoff"/></div>
+        <div class="card"><div class="k">每样本 MAE 热力图</div><img src="fc_threshold_mae_heatmap_per_sample.png" alt="mae heatmap"/></div>
+        <div class="card"><div class="k">每样本覆盖率热力图</div><img src="fc_threshold_coverage_heatmap_per_sample.png" alt="coverage heatmap"/></div>
+      </div>
+    </section>
 
-<div class="section">
-  <h2>达到 K 个高置信点所需秒数（按视频分布）</h2>
-  <div class="muted">每个单元是分位数秒数；例如 `q50` 表示 50% 视频在该秒数前可拿到 K 个高置信点。</div>
-  <div class="table-wrap"><table id="timeToKTable">
-    <thead><tr>
-      <th>threshold</th><th>K</th><th>have/miss</th>
-      <th>q0</th><th>q25</th><th>q50</th><th>q75</th><th>q90</th><th>q100</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table></div>
-</div>
+    <section class="section panel" id="sec-warmup">
+      <h2>最短时间与精度可视化</h2>
+      <div class="muted">目标：看“等待多少秒”能拿到更高精度 HR（min_sec + freq_conf 联合门控）。</div>
+      <div class="controls">
+        <label>threshold:
+          <select id="warmupThreshold" onchange="renderWarmup()">
+            {"".join([f'<option value="{thr:.2f}">{thr:.2f}</option>' for thr in warmup_thresholds])}
+          </select>
+        </label>
+      </div>
+      <div id="warmupMeta" class="muted"></div>
+      <div class="grid">
+        <div class="card">
+          <div class="k">MAE vs min_sec</div>
+          <div class="plot-wrap"><svg id="warmupMaePlot" width="560" height="300" viewBox="0 0 560 300"></svg></div>
+        </div>
+        <div class="card">
+          <div class="k">Coverage vs min_sec</div>
+          <div class="plot-wrap"><svg id="warmupCovPlot" width="560" height="300" viewBox="0 0 560 300"></svg></div>
+        </div>
+      </div>
+      <details class="fold" open>
+        <summary>查看 warmup 明细表</summary>
+        <div class="table-wrap"><table id="warmupTable">
+          <thead><tr><th>min_sec</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+    </section>
 
-<div class="section">
-  <h2>逐样本参数矩阵（MAE / 覆盖率）</h2>
-  <div class="muted">筛选 sample（例如 003/1-1、6/6-3）。</div>
-  <p><input id="qMatrix" type="text" placeholder="筛选 sample..." oninput="filterMatrixRows()" /></p>
-  <div class="table-wrap"><table id="matrix">
-    <thead><tr>
-      <th>sample</th><th>n_all</th><th>mae_all</th>
-      {threshold_cells}
-    </tr></thead>
-    <tbody>
-      {"".join(matrix_rows)}
-    </tbody>
-  </table></div>
-</div>
+    <section class="section panel" id="sec-time-to-k">
+      <h2>达到 K 个高置信点所需秒数（按视频分布）</h2>
+      <div class="muted">例如 `q50` 表示 50% 视频在该秒数前可拿到 K 个高置信点。</div>
+      <div class="table-wrap"><table id="timeToKTable">
+        <thead><tr>
+          <th>threshold</th><th>K</th><th>have/miss</th>
+          <th>q0</th><th>q25</th><th>q50</th><th>q75</th><th>q90</th><th>q100</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
 
-<div class="section">
-  <h2>每一个文件的 HR 测量数值对比</h2>
-  <div class="muted">列含义：`ECG均值`、`rPPG均值`、`Bias=rPPG-ECG`、`MAE`、`RMSE`。阈值改变时，按该阈值筛选同一文件内的秒级点。</div>
-  <div class="controls">
-    <label>threshold:
-      <select id="hrThreshold" onchange="renderHrTable(); syncPlotThreshold();">
-        {threshold_options}
-      </select>
-    </label>
-    <label>sample 过滤:
-      <input id="qHr" type="text" placeholder="输入 sample 关键字..." oninput="renderHrTable()" />
-    </label>
-  </div>
-  <div class="table-wrap"><table id="hrTable">
-    <thead><tr>
-      <th>sample</th><th>n_all</th><th>n_used</th><th>coverage</th>
-      <th>ECG均值</th><th>rPPG均值</th><th>Bias</th><th>MAE</th><th>RMSE</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table></div>
-</div>
+    <section class="section panel" id="sec-matrix">
+      <h2>逐样本参数矩阵（MAE / 覆盖率）</h2>
+      <div class="muted">可针对单样本（如 `003/1-1`）横向看每个阈值的收益与代价。</div>
+      <p><input id="qMatrix" type="text" placeholder="筛选 sample..." oninput="filterMatrixRows()" /></p>
+      <div class="table-wrap"><table id="matrix">
+        <thead><tr>
+          <th>sample</th><th>n_all</th><th>mae_all</th>
+          {threshold_cells}
+        </tr></thead>
+        <tbody>
+          {"".join(matrix_rows)}
+        </tbody>
+      </table></div>
+    </section>
 
-<div class="section">
-  <h2>每文件逐秒 HR 曲线对比</h2>
-  <div class="controls">
-    <label>sample:
-      <select id="plotSample" onchange="drawHrPlot()">{sample_options}</select>
-    </label>
-    <label>threshold:
-      <select id="plotThreshold" onchange="drawHrPlot()">{threshold_options}</select>
-    </label>
-  </div>
-  <div id="plotMeta" class="muted"></div>
-  <div class="legend">
-    <span><span class="dot" style="background:#9ca3af;"></span>ECG(all points)</span>
-    <span><span class="dot" style="background:#2563eb;"></span>ECG(filtered)</span>
-    <span><span class="dot" style="background:#ea580c;"></span>rPPG(filtered)</span>
-  </div>
-  <div class="plot-wrap">
-    <svg id="hrPlot" width="960" height="360" viewBox="0 0 960 360" role="img" aria-label="HR plot"></svg>
-  </div>
-</div>
+    <section class="section panel" id="sec-hr-table">
+      <h2>每一个文件的 HR 测量数值对比</h2>
+      <div class="muted">按阈值筛选后，给出每个文件的 `ECG 均值 / rPPG 均值 / Bias / MAE / RMSE`。</div>
+      <div class="controls">
+        <label>threshold:
+          <select id="hrThreshold" onchange="renderHrTable(); syncPlotThreshold();">
+            {threshold_options}
+          </select>
+        </label>
+        <label>sample 过滤:
+          <input id="qHr" type="text" placeholder="输入 sample 关键字..." oninput="renderHrTable()" />
+        </label>
+      </div>
+      <div class="table-wrap"><table id="hrTable">
+        <thead><tr>
+          <th>sample</th><th>n_all</th><th>n_used</th><th>coverage</th>
+          <th>ECG均值</th><th>rPPG均值</th><th>Bias</th><th>MAE</th><th>RMSE</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
 
-<div class="section">
-  <h2>泛化分析（当前发布策略 vs baseline）</h2>
-  <div id="genMeta" class="muted">加载中...</div>
-  <div class="grid" id="genCards"></div>
+    <section class="section panel" id="sec-hr-plot">
+      <h2>每文件逐秒 HR 曲线对比</h2>
+      <div class="controls">
+        <label>sample:
+          <select id="plotSample" onchange="drawHrPlot()">{sample_options}</select>
+        </label>
+        <label>threshold:
+          <select id="plotThreshold" onchange="drawHrPlot()">{threshold_options}</select>
+        </label>
+      </div>
+      <div id="plotMeta" class="muted"></div>
+      <div class="legend">
+        <span><span class="dot" style="background:#9ca3af;"></span>ECG(all points)</span>
+        <span><span class="dot" style="background:#2563eb;"></span>ECG(filtered)</span>
+        <span><span class="dot" style="background:#ea580c;"></span>rPPG(filtered)</span>
+      </div>
+      <div class="plot-wrap">
+        <svg id="hrPlot" width="960" height="360" viewBox="0 0 960 360" role="img" aria-label="HR plot"></svg>
+      </div>
+    </section>
 
-  <h3>Domain 对比</h3>
-  <div class="table-wrap"><table id="genDomainTable">
-    <thead><tr>
-      <th>domain</th><th>n</th><th>sample_count</th><th>group_count</th>
-      <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table></div>
+    <section class="section panel" id="sec-generalization">
+      <h2>泛化分析（当前发布策略 vs baseline）</h2>
+      <div id="genMeta" class="muted">加载中...</div>
+      <div class="grid" id="genCards"></div>
 
-  <h3>Group 对比（当前策略）</h3>
-  <div class="table-wrap"><table id="genGroupTable">
-    <thead><tr>
-      <th>group_id</th><th>group_raw</th><th>n</th><th>sample_count</th>
-      <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold" open>
+        <summary>Domain 对比</summary>
+        <div class="table-wrap"><table id="genDomainTable">
+          <thead><tr>
+            <th>domain</th><th>n</th><th>sample_count</th><th>group_count</th>
+            <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-  <h3>Group 相对 Baseline 变化</h3>
-  <div class="table-wrap"><table id="genDeltaTable">
-    <thead><tr>
-      <th>group_id</th><th>group_raw</th><th>n_base</th><th>n_cur</th><th>coverage_ratio</th>
-      <th>MAE_base</th><th>MAE_cur</th><th>Delta_MAE</th>
-      <th>RMSE_base</th><th>RMSE_cur</th><th>Delta_RMSE</th>
-      <th>corr_base</th><th>corr_cur</th><th>Delta_corr</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold" open>
+        <summary>Group 对比（当前策略）</summary>
+        <div class="table-wrap"><table id="genGroupTable">
+          <thead><tr>
+            <th>group_id</th><th>group_raw</th><th>n</th><th>sample_count</th>
+            <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-  <h3>Worst Samples（当前策略）</h3>
-  <div class="table-wrap"><table id="genSampleTable">
-    <thead><tr>
-      <th>sample</th><th>group_id</th><th>group_raw</th><th>n</th>
-      <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th><th>first_sec</th>
-    </tr></thead>
-    <tbody></tbody>
-  </table></div>
-</div>
+      <details class="fold" open>
+        <summary>Group 相对 Baseline 变化</summary>
+        <div class="table-wrap"><table id="genDeltaTable">
+          <thead><tr>
+            <th>group_id</th><th>group_raw</th><th>n_base</th><th>n_cur</th><th>coverage_ratio</th>
+            <th>MAE_base</th><th>MAE_cur</th><th>Delta_MAE</th>
+            <th>RMSE_base</th><th>RMSE_cur</th><th>Delta_RMSE</th>
+            <th>corr_base</th><th>corr_cur</th><th>Delta_corr</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-<div class="section">
-  <h2>ECG-rPPG 位移（lag）分析</h2>
-  <div class="controls">
-    <label>metric:
-      <select id="lagMetric" onchange="renderLagAnalysis()">
-        <option value="mae">MAE</option>
-        <option value="rmse">RMSE</option>
-      </select>
-    </label>
-  </div>
-  <div id="lagMeta" class="muted">加载中...</div>
-  <div class="plot-wrap">
-    <svg id="lagCurvePlot" width="960" height="340" viewBox="0 0 960 340" role="img" aria-label="Lag curve"></svg>
-  </div>
+      <details class="fold">
+        <summary>Worst Samples（当前策略）</summary>
+        <div class="table-wrap"><table id="genSampleTable">
+          <thead><tr>
+            <th>sample</th><th>group_id</th><th>group_raw</th><th>n</th>
+            <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th><th>first_sec</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+    </section>
 
-  <h3>Lag 曲线数值（baseline vs current）</h3>
-  <div class="table-wrap"><table id="lagCurveTable">
-    <thead><tr><th>lag</th><th>baseline_n</th><th>baseline_MAE</th><th>baseline_RMSE</th><th>current_n</th><th>current_MAE</th><th>current_RMSE</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+    <section class="section panel" id="sec-lag">
+      <h2>ECG-rPPG 位移（lag）分析</h2>
+      <div class="controls">
+        <label>metric:
+          <select id="lagMetric" onchange="renderLagAnalysis()">
+            <option value="mae">MAE</option>
+            <option value="rmse">RMSE</option>
+          </select>
+        </label>
+      </div>
+      <div id="lagMeta" class="muted">加载中...</div>
+      <div class="plot-wrap">
+        <svg id="lagCurvePlot" width="960" height="340" viewBox="0 0 960 340" role="img" aria-label="Lag curve"></svg>
+      </div>
 
-  <h3>每样本 lag 改善（baseline）</h3>
-  <div class="table-wrap"><table id="lagSampleBaselineTable">
-    <thead><tr><th>sample</th><th>n0</th><th>mae_lag0</th><th>best_lag</th><th>best_mae</th><th>best_n</th><th>mae_gain</th><th>gain_ratio</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold" open>
+        <summary>Lag 曲线数值（baseline vs current）</summary>
+        <div class="table-wrap"><table id="lagCurveTable">
+          <thead><tr><th>lag</th><th>baseline_n</th><th>baseline_MAE</th><th>baseline_RMSE</th><th>current_n</th><th>current_MAE</th><th>current_RMSE</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-  <h3>每样本 lag 改善（current）</h3>
-  <div class="table-wrap"><table id="lagSampleCurrentTable">
-    <thead><tr><th>sample</th><th>n0</th><th>mae_lag0</th><th>best_lag</th><th>best_mae</th><th>best_n</th><th>mae_gain</th><th>gain_ratio</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold">
+        <summary>每样本 lag 改善（baseline）</summary>
+        <div class="table-wrap"><table id="lagSampleBaselineTable">
+          <thead><tr><th>sample</th><th>n0</th><th>mae_lag0</th><th>best_lag</th><th>best_mae</th><th>best_n</th><th>mae_gain</th><th>gain_ratio</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-  <h3>固定窗口 Lag 扫描（baseline）</h3>
-  <div class="table-wrap"><table id="lagCommonWindowTable">
-    <thead><tr><th>sample</th><th>n_common</th><th>best_lag_mae</th><th>best_mae</th><th>lag0_mae</th><th>mae_gain</th><th>best_lag_corr</th><th>best_corr</th><th>lag0_corr</th><th>corr_gain</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold">
+        <summary>每样本 lag 改善（current）</summary>
+        <div class="table-wrap"><table id="lagSampleCurrentTable">
+          <thead><tr><th>sample</th><th>n0</th><th>mae_lag0</th><th>best_lag</th><th>best_mae</th><th>best_n</th><th>mae_gain</th><th>gain_ratio</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-  <h3>Diff-Corr Lag（baseline）</h3>
-  <div class="table-wrap"><table id="lagDiffCorrTable">
-    <thead><tr><th>sample</th><th>n</th><th>lag0_diff_mae</th><th>lag0_diff_corr</th><th>best_lag_by_diff_corr</th><th>best_diff_mae</th><th>best_diff_corr</th><th>corr_gain</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold">
+        <summary>固定窗口 Lag 扫描（baseline）</summary>
+        <div class="table-wrap"><table id="lagCommonWindowTable">
+          <thead><tr><th>sample</th><th>n_common</th><th>best_lag_mae</th><th>best_mae</th><th>lag0_mae</th><th>mae_gain</th><th>best_lag_corr</th><th>best_corr</th><th>lag0_corr</th><th>corr_gain</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
 
-  <h3>Global Diff-Corr 曲线（baseline）</h3>
-  <div class="table-wrap"><table id="lagGlobalDiffTable">
-    <thead><tr><th>lag</th><th>diff_mae</th><th>diff_corr</th><th>n</th></tr></thead>
-    <tbody></tbody>
-  </table></div>
+      <details class="fold">
+        <summary>Diff-Corr Lag（baseline）</summary>
+        <div class="table-wrap"><table id="lagDiffCorrTable">
+          <thead><tr><th>sample</th><th>n</th><th>lag0_diff_mae</th><th>lag0_diff_corr</th><th>best_lag_by_diff_corr</th><th>best_diff_mae</th><th>best_diff_corr</th><th>corr_gain</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+
+      <details class="fold">
+        <summary>Global Diff-Corr 曲线（baseline）</summary>
+        <div class="table-wrap"><table id="lagGlobalDiffTable">
+          <thead><tr><th>lag</th><th>diff_mae</th><th>diff_corr</th><th>n</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+    </section>
+  </main>
 </div>
 
 <script>
 const SAMPLE_STATS = {sample_stats_json};
 const SERIES_DATA = {series_json};
 const THRESHOLDS = {threshold_js};
+const OVERALL_ROWS = {overall_json};
 const WARMUP_ROWS = {warmup_json};
 const TIME_TO_K_ROWS = {time_to_k_json};
 const WARMUP_THRESHOLDS = {warmup_threshold_js};
@@ -1034,6 +1256,54 @@ function fmtSigned(v, digits=3) {{
   const n = Number(v);
   const s = n >= 0 ? "+" : "";
   return s + n.toFixed(digits);
+}}
+
+function updateHeroKpis() {{
+  const rows = (OVERALL_ROWS || []).filter(r => r && r.mae !== null && !Number.isNaN(Number(r.mae)));
+  let best = null;
+  for (const r of rows) {{
+    if (!best || Number(r.mae) < Number(best.mae)) best = r;
+  }}
+  const g = (GENERALIZATION && GENERALIZATION.overview) ? GENERALIZATION.overview : {{}};
+  const worst = (GENERALIZATION && Array.isArray(GENERALIZATION.samples) && GENERALIZATION.samples.length)
+    ? GENERALIZATION.samples[0]
+    : null;
+
+  const setTxt = (id, txt) => {{
+    const el = document.getElementById(id);
+    if (el) el.textContent = txt;
+  }};
+
+  setTxt("kpiBestThreshold", best ? `fc>=${{Number(best.threshold).toFixed(2)}}` : "-");
+  setTxt("kpiBestMae", best ? fmt(best.mae) : "-");
+  setTxt("kpiBestCoverage", best ? fmtPct(best.coverage) : "-");
+  setTxt("kpiPublishedMae", g.mae_cur !== undefined ? fmt(g.mae_cur) : "-");
+  setTxt("kpiCoverageRatio", (g.n_cur && g.n_base) ? `${{fmtPct(g.n_cur / g.n_base)}} (${{g.n_cur}}/${{g.n_base}})` : "-");
+  setTxt("kpiWorstSample", worst ? `${{worst.sample}} (MAE=${{fmt(worst.mae)}})` : "-");
+}}
+
+function initTocHighlight() {{
+  const links = Array.from(document.querySelectorAll(".toc a"));
+  if (!links.length) return;
+  const sections = links
+    .map(a => document.querySelector(a.getAttribute("href")))
+    .filter(Boolean);
+
+  const apply = () => {{
+    let active = sections[0];
+    const y = window.scrollY + 140;
+    for (const sec of sections) {{
+      if (sec.offsetTop <= y) active = sec;
+    }}
+    links.forEach(a => {{
+      const hit = a.getAttribute("href") === `#${{active.id}}`;
+      a.style.background = hit ? "#dff3ef" : "";
+      a.style.color = hit ? "#0f766e" : "";
+      a.style.fontWeight = hit ? "700" : "500";
+    }});
+  }};
+  apply();
+  window.addEventListener("scroll", apply, {{ passive: true }});
 }}
 
 function filterMatrixRows() {{
@@ -1589,6 +1859,8 @@ renderWarmup();
 renderTimeToKTable();
 renderGeneralization();
 renderLagAnalysis();
+updateHeroKpis();
+initTocHighlight();
 filterMatrixRows();
 (() => {{
   const first = document.getElementById("plotSample");
