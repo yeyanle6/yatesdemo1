@@ -61,6 +61,66 @@ def _parse_args() -> argparse.Namespace:
         help="Output HTML report path.",
     )
     parser.add_argument(
+        "--generalization-domain-csv",
+        default="results/generalization_fc088/generalization_per_domain.csv",
+        help="Optional generalization domain summary CSV.",
+    )
+    parser.add_argument(
+        "--generalization-group-csv",
+        default="results/generalization_fc088/generalization_per_group.csv",
+        help="Optional generalization group summary CSV.",
+    )
+    parser.add_argument(
+        "--generalization-delta-csv",
+        default="results/generalization_fc088/generalization_group_vs_baseline.csv",
+        help="Optional generalization group-vs-baseline delta CSV.",
+    )
+    parser.add_argument(
+        "--generalization-sample-csv",
+        default="results/generalization_fc088/generalization_per_sample.csv",
+        help="Optional generalization per-sample summary CSV.",
+    )
+    parser.add_argument(
+        "--generalization-report-md",
+        default="results/generalization_fc088/GENERALIZATION_REPORT.md",
+        help="Optional generalization report markdown with overall current/baseline metrics.",
+    )
+    parser.add_argument(
+        "--lag-curve-baseline-csv",
+        default="results/lag_analysis/lag_curve_baseline_best.csv",
+        help="Optional lag curve CSV for baseline.",
+    )
+    parser.add_argument(
+        "--lag-curve-current-csv",
+        default="results/lag_analysis/lag_curve_published_fc088.csv",
+        help="Optional lag curve CSV for current/published setting.",
+    )
+    parser.add_argument(
+        "--lag-sample-baseline-csv",
+        default="results/lag_analysis/lag_per_sample_baseline_best.csv",
+        help="Optional per-sample lag gain CSV for baseline.",
+    )
+    parser.add_argument(
+        "--lag-sample-current-csv",
+        default="results/lag_analysis/lag_per_sample_published_fc088.csv",
+        help="Optional per-sample lag gain CSV for current/published setting.",
+    )
+    parser.add_argument(
+        "--lag-commonwindow-sample-csv",
+        default="results/lag_analysis/lag_commonwindow_per_sample_baseline_best.csv",
+        help="Optional fixed-window lag comparison CSV (baseline).",
+    )
+    parser.add_argument(
+        "--lag-diffcorr-sample-csv",
+        default="results/lag_analysis/lag_diffcorr_per_sample_baseline_best.csv",
+        help="Optional diff-correlation lag summary CSV (baseline).",
+    )
+    parser.add_argument(
+        "--lag-global-diff-csv",
+        default="results/lag_analysis/lag_global_diff_curve_baseline_best.csv",
+        help="Optional global diff-correlation lag curve CSV (baseline).",
+    )
+    parser.add_argument(
         "--thresholds",
         default="0.80,0.82,0.84,0.86,0.88,0.90,0.92,0.94",
         help="Comma-separated freq_conf thresholds.",
@@ -321,6 +381,320 @@ def _build_series_json(df: pd.DataFrame) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _read_optional_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _to_json_scalar(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        if not np.isfinite(value):
+            return None
+        return float(value)
+    if pd.isna(value):
+        return None
+    return str(value)
+
+
+def _records_from_df(
+    df: pd.DataFrame,
+    columns: List[str] | None = None,
+    sort_by: str | None = None,
+    ascending: bool = True,
+    limit: int | None = None,
+) -> List[Dict[str, object]]:
+    if df.empty:
+        return []
+    out = df.copy()
+    if columns is not None:
+        keep = [c for c in columns if c in out.columns]
+        out = out[keep]
+    if sort_by is not None and sort_by in out.columns:
+        out = out.sort_values(sort_by, ascending=ascending)
+    if limit is not None:
+        out = out.head(limit)
+
+    records: List[Dict[str, object]] = []
+    for _, row in out.iterrows():
+        rec: Dict[str, object] = {}
+        for col in out.columns:
+            rec[col] = _to_json_scalar(row[col])
+        records.append(rec)
+    return records
+
+
+def _weighted_avg(df: pd.DataFrame, value_col: str, weight_col: str) -> float:
+    if value_col not in df.columns or weight_col not in df.columns:
+        return math.nan
+    tmp = df[[value_col, weight_col]].copy()
+    tmp[value_col] = pd.to_numeric(tmp[value_col], errors="coerce")
+    tmp[weight_col] = pd.to_numeric(tmp[weight_col], errors="coerce")
+    tmp = tmp.dropna()
+    tmp = tmp[tmp[weight_col] > 0]
+    if tmp.empty:
+        return math.nan
+    w = tmp[weight_col].to_numpy(dtype=float)
+    v = tmp[value_col].to_numpy(dtype=float)
+    return float(np.sum(v * w) / np.sum(w))
+
+
+def _weighted_rmse_from_group(df: pd.DataFrame, rmse_col: str, n_col: str) -> float:
+    if rmse_col not in df.columns or n_col not in df.columns:
+        return math.nan
+    tmp = df[[rmse_col, n_col]].copy()
+    tmp[rmse_col] = pd.to_numeric(tmp[rmse_col], errors="coerce")
+    tmp[n_col] = pd.to_numeric(tmp[n_col], errors="coerce")
+    tmp = tmp.dropna()
+    tmp = tmp[tmp[n_col] > 0]
+    if tmp.empty:
+        return math.nan
+    n = tmp[n_col].to_numpy(dtype=float)
+    rmse = tmp[rmse_col].to_numpy(dtype=float)
+    return float(np.sqrt(np.sum(n * (rmse ** 2)) / np.sum(n)))
+
+
+def _parse_generalization_overview(report_md: Path) -> Dict[str, object]:
+    if not report_md.exists():
+        return {}
+    try:
+        text = report_md.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+
+    pattern = re.compile(
+        r"-\s*(Current|Baseline):\s*n=(\d+),\s*MAE=([\-0-9.]+),\s*RMSE=([\-0-9.]+),\s*corr=([\-0-9.]+)",
+        re.IGNORECASE,
+    )
+    found: Dict[str, Dict[str, float]] = {}
+    for m in pattern.finditer(text):
+        key = m.group(1).lower()
+        found[key] = {
+            "n": float(m.group(2)),
+            "mae": float(m.group(3)),
+            "rmse": float(m.group(4)),
+            "corr": float(m.group(5)),
+        }
+
+    current = found.get("current")
+    baseline = found.get("baseline")
+    if not current or not baseline:
+        return {}
+
+    return {
+        "n_cur": int(current["n"]),
+        "n_base": int(baseline["n"]),
+        "mae_cur": current["mae"],
+        "mae_base": baseline["mae"],
+        "rmse_cur": current["rmse"],
+        "rmse_base": baseline["rmse"],
+        "corr_cur": current["corr"],
+        "corr_base": baseline["corr"],
+        "delta_mae": current["mae"] - baseline["mae"],
+        "delta_rmse": current["rmse"] - baseline["rmse"],
+        "delta_corr": current["corr"] - baseline["corr"],
+    }
+
+
+def _build_generalization_json(
+    domain_df: pd.DataFrame,
+    group_df: pd.DataFrame,
+    delta_df: pd.DataFrame,
+    sample_df: pd.DataFrame,
+    report_md: Path | None = None,
+) -> str:
+    overview = _parse_generalization_overview(report_md) if report_md is not None else {}
+    if not overview and not delta_df.empty:
+        n_cur = int(pd.to_numeric(delta_df.get("n_cur"), errors="coerce").fillna(0).sum())
+        n_base = int(pd.to_numeric(delta_df.get("n_base"), errors="coerce").fillna(0).sum())
+        mae_cur = _weighted_avg(delta_df, "mae_cur", "n_cur")
+        mae_base = _weighted_avg(delta_df, "mae_base", "n_base")
+        rmse_cur = _weighted_rmse_from_group(delta_df, "rmse_cur", "n_cur")
+        rmse_base = _weighted_rmse_from_group(delta_df, "rmse_base", "n_base")
+        corr_cur = _weighted_avg(delta_df, "corr_cur", "n_cur")
+        corr_base = _weighted_avg(delta_df, "corr_base", "n_base")
+        overview = {
+            "n_cur": n_cur,
+            "n_base": n_base,
+            "mae_cur": _to_json_scalar(mae_cur),
+            "mae_base": _to_json_scalar(mae_base),
+            "rmse_cur": _to_json_scalar(rmse_cur),
+            "rmse_base": _to_json_scalar(rmse_base),
+            "corr_cur": _to_json_scalar(corr_cur),
+            "corr_base": _to_json_scalar(corr_base),
+            "delta_mae": _to_json_scalar(mae_cur - mae_base if np.isfinite(mae_cur) and np.isfinite(mae_base) else math.nan),
+            "delta_rmse": _to_json_scalar(
+                rmse_cur - rmse_base if np.isfinite(rmse_cur) and np.isfinite(rmse_base) else math.nan
+            ),
+            "delta_corr": _to_json_scalar(
+                corr_cur - corr_base if np.isfinite(corr_cur) and np.isfinite(corr_base) else math.nan
+            ),
+        }
+
+    payload = {
+        "overview": overview,
+        "domain": _records_from_df(
+            domain_df,
+            columns=[
+                "domain",
+                "n",
+                "sample_count",
+                "group_count",
+                "mae",
+                "rmse",
+                "corr",
+                "bias",
+                "p90_abs_error",
+            ],
+            sort_by="mae",
+            ascending=False,
+        ),
+        "group": _records_from_df(
+            group_df,
+            columns=[
+                "group_id",
+                "group_raw",
+                "n",
+                "sample_count",
+                "mae",
+                "rmse",
+                "corr",
+                "bias",
+                "p90_abs_error",
+            ],
+            sort_by="mae",
+            ascending=False,
+        ),
+        "delta": _records_from_df(
+            delta_df,
+            columns=[
+                "group_id",
+                "group_raw",
+                "n_base",
+                "n_cur",
+                "coverage_ratio",
+                "mae_base",
+                "mae_cur",
+                "delta_mae",
+                "rmse_base",
+                "rmse_cur",
+                "delta_rmse",
+                "corr_base",
+                "corr_cur",
+                "delta_corr",
+            ],
+            sort_by="delta_mae",
+            ascending=True,
+        ),
+        "samples": _records_from_df(
+            sample_df,
+            columns=[
+                "sample",
+                "group_id",
+                "group_raw",
+                "n",
+                "mae",
+                "rmse",
+                "corr",
+                "bias",
+                "p90_abs_error",
+                "first_sec",
+            ],
+            sort_by="mae",
+            ascending=False,
+            limit=30,
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_lag_json(
+    curve_baseline_df: pd.DataFrame,
+    curve_current_df: pd.DataFrame,
+    sample_baseline_df: pd.DataFrame,
+    sample_current_df: pd.DataFrame,
+    commonwindow_df: pd.DataFrame,
+    diffcorr_df: pd.DataFrame,
+    global_diff_df: pd.DataFrame,
+) -> str:
+    payload = {
+        "curve_baseline": _records_from_df(
+            curve_baseline_df,
+            columns=["lag", "mae", "rmse", "n"],
+            sort_by="lag",
+            ascending=True,
+        ),
+        "curve_current": _records_from_df(
+            curve_current_df,
+            columns=["lag", "mae", "rmse", "n"],
+            sort_by="lag",
+            ascending=True,
+        ),
+        "sample_baseline": _records_from_df(
+            sample_baseline_df,
+            columns=["sample", "n0", "mae_lag0", "best_lag", "best_mae", "best_n", "mae_gain", "gain_ratio"],
+            sort_by="mae_gain",
+            ascending=False,
+            limit=30,
+        ),
+        "sample_current": _records_from_df(
+            sample_current_df,
+            columns=["sample", "n0", "mae_lag0", "best_lag", "best_mae", "best_n", "mae_gain", "gain_ratio"],
+            sort_by="mae_gain",
+            ascending=False,
+            limit=30,
+        ),
+        "commonwindow": _records_from_df(
+            commonwindow_df,
+            columns=[
+                "sample",
+                "n_common",
+                "best_lag_mae",
+                "best_mae",
+                "lag0_mae",
+                "mae_gain",
+                "best_lag_corr",
+                "best_corr",
+                "lag0_corr",
+                "corr_gain",
+            ],
+            sort_by="mae_gain",
+            ascending=False,
+            limit=30,
+        ),
+        "diffcorr": _records_from_df(
+            diffcorr_df,
+            columns=[
+                "sample",
+                "n",
+                "lag0_diff_mae",
+                "lag0_diff_corr",
+                "best_lag_by_diff_corr",
+                "best_diff_mae",
+                "best_diff_corr",
+                "corr_gain",
+            ],
+            sort_by="corr_gain",
+            ascending=False,
+            limit=30,
+        ),
+        "global_diff_curve": _records_from_df(
+            global_diff_df,
+            columns=["lag", "diff_mae", "diff_corr", "n"],
+            sort_by="lag",
+            ascending=True,
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def _render_html(
     overall_rows: List[Dict[str, float]],
     matrix_wide: pd.DataFrame,
@@ -330,6 +704,8 @@ def _render_html(
     warmup_thresholds: List[float],
     sample_stats_json: str,
     series_json: str,
+    generalization_json: str,
+    lag_json: str,
 ) -> str:
     overall_html_rows: List[str] = []
     for row in overall_rows:
@@ -537,6 +913,102 @@ input[type="text"], select {{ border:1px solid #d1d5db; border-radius:8px; paddi
   </div>
 </div>
 
+<div class="section">
+  <h2>泛化分析（当前发布策略 vs baseline）</h2>
+  <div id="genMeta" class="muted">加载中...</div>
+  <div class="grid" id="genCards"></div>
+
+  <h3>Domain 对比</h3>
+  <div class="table-wrap"><table id="genDomainTable">
+    <thead><tr>
+      <th>domain</th><th>n</th><th>sample_count</th><th>group_count</th>
+      <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>Group 对比（当前策略）</h3>
+  <div class="table-wrap"><table id="genGroupTable">
+    <thead><tr>
+      <th>group_id</th><th>group_raw</th><th>n</th><th>sample_count</th>
+      <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>Group 相对 Baseline 变化</h3>
+  <div class="table-wrap"><table id="genDeltaTable">
+    <thead><tr>
+      <th>group_id</th><th>group_raw</th><th>n_base</th><th>n_cur</th><th>coverage_ratio</th>
+      <th>MAE_base</th><th>MAE_cur</th><th>Delta_MAE</th>
+      <th>RMSE_base</th><th>RMSE_cur</th><th>Delta_RMSE</th>
+      <th>corr_base</th><th>corr_cur</th><th>Delta_corr</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>Worst Samples（当前策略）</h3>
+  <div class="table-wrap"><table id="genSampleTable">
+    <thead><tr>
+      <th>sample</th><th>group_id</th><th>group_raw</th><th>n</th>
+      <th>MAE</th><th>RMSE</th><th>corr</th><th>bias</th><th>p90_abs_error</th><th>first_sec</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table></div>
+</div>
+
+<div class="section">
+  <h2>ECG-rPPG 位移（lag）分析</h2>
+  <div class="controls">
+    <label>metric:
+      <select id="lagMetric" onchange="renderLagAnalysis()">
+        <option value="mae">MAE</option>
+        <option value="rmse">RMSE</option>
+      </select>
+    </label>
+  </div>
+  <div id="lagMeta" class="muted">加载中...</div>
+  <div class="plot-wrap">
+    <svg id="lagCurvePlot" width="960" height="340" viewBox="0 0 960 340" role="img" aria-label="Lag curve"></svg>
+  </div>
+
+  <h3>Lag 曲线数值（baseline vs current）</h3>
+  <div class="table-wrap"><table id="lagCurveTable">
+    <thead><tr><th>lag</th><th>baseline_n</th><th>baseline_MAE</th><th>baseline_RMSE</th><th>current_n</th><th>current_MAE</th><th>current_RMSE</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>每样本 lag 改善（baseline）</h3>
+  <div class="table-wrap"><table id="lagSampleBaselineTable">
+    <thead><tr><th>sample</th><th>n0</th><th>mae_lag0</th><th>best_lag</th><th>best_mae</th><th>best_n</th><th>mae_gain</th><th>gain_ratio</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>每样本 lag 改善（current）</h3>
+  <div class="table-wrap"><table id="lagSampleCurrentTable">
+    <thead><tr><th>sample</th><th>n0</th><th>mae_lag0</th><th>best_lag</th><th>best_mae</th><th>best_n</th><th>mae_gain</th><th>gain_ratio</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>固定窗口 Lag 扫描（baseline）</h3>
+  <div class="table-wrap"><table id="lagCommonWindowTable">
+    <thead><tr><th>sample</th><th>n_common</th><th>best_lag_mae</th><th>best_mae</th><th>lag0_mae</th><th>mae_gain</th><th>best_lag_corr</th><th>best_corr</th><th>lag0_corr</th><th>corr_gain</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>Diff-Corr Lag（baseline）</h3>
+  <div class="table-wrap"><table id="lagDiffCorrTable">
+    <thead><tr><th>sample</th><th>n</th><th>lag0_diff_mae</th><th>lag0_diff_corr</th><th>best_lag_by_diff_corr</th><th>best_diff_mae</th><th>best_diff_corr</th><th>corr_gain</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+
+  <h3>Global Diff-Corr 曲线（baseline）</h3>
+  <div class="table-wrap"><table id="lagGlobalDiffTable">
+    <thead><tr><th>lag</th><th>diff_mae</th><th>diff_corr</th><th>n</th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+</div>
+
 <script>
 const SAMPLE_STATS = {sample_stats_json};
 const SERIES_DATA = {series_json};
@@ -544,6 +1016,8 @@ const THRESHOLDS = {threshold_js};
 const WARMUP_ROWS = {warmup_json};
 const TIME_TO_K_ROWS = {time_to_k_json};
 const WARMUP_THRESHOLDS = {warmup_threshold_js};
+const GENERALIZATION = {generalization_json};
+const LAG_ANALYSIS = {lag_json};
 
 function fmt(v, digits=3) {{
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
@@ -553,6 +1027,13 @@ function fmt(v, digits=3) {{
 function fmtPct(v) {{
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
   return (Number(v) * 100).toFixed(1) + "%";
+}}
+
+function fmtSigned(v, digits=3) {{
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
+  const n = Number(v);
+  const s = n >= 0 ? "+" : "";
+  return s + n.toFixed(digits);
 }}
 
 function filterMatrixRows() {{
@@ -680,6 +1161,290 @@ function renderTimeToKTable() {{
     <td>${{fmt(r.q75, 1)}}</td>
     <td>${{fmt(r.q90, 1)}}</td>
     <td>${{fmt(r.q100, 1)}}</td>
+  </tr>`).join("");
+}}
+
+function renderGeneralization() {{
+  const meta = document.getElementById("genMeta");
+  const cards = document.getElementById("genCards");
+  const g = GENERALIZATION || {{}};
+  const overview = g.overview || {{}};
+
+  const hasAny =
+    (Array.isArray(g.domain) && g.domain.length > 0) ||
+    (Array.isArray(g.group) && g.group.length > 0) ||
+    (Array.isArray(g.delta) && g.delta.length > 0) ||
+    (Array.isArray(g.samples) && g.samples.length > 0);
+
+  if (!hasAny) {{
+    if (meta) meta.textContent = "未找到泛化分析 CSV（可通过 --generalization-*-csv 指定）。";
+    if (cards) cards.innerHTML = "";
+    return;
+  }}
+
+  const nCur = overview.n_cur;
+  const nBase = overview.n_base;
+  if (meta) {{
+    meta.textContent =
+      `当前策略 n=${{nCur ?? ""}} / baseline n=${{nBase ?? ""}} | ` +
+      `MAE ${{fmt(overview.mae_cur)}} vs ${{fmt(overview.mae_base)}} (Δ${{fmtSigned(overview.delta_mae)}}), ` +
+      `RMSE ${{fmt(overview.rmse_cur)}} vs ${{fmt(overview.rmse_base)}} (Δ${{fmtSigned(overview.delta_rmse)}}), ` +
+      `corr ${{fmt(overview.corr_cur)}} vs ${{fmt(overview.corr_base)}} (Δ${{fmtSigned(overview.delta_corr)}}).`;
+  }}
+
+  if (cards) {{
+    cards.innerHTML = `
+      <div class="card"><div class="k">Current MAE / RMSE / corr</div><div><b>${{fmt(overview.mae_cur)}}</b> / ${{fmt(overview.rmse_cur)}} / ${{fmt(overview.corr_cur)}}</div></div>
+      <div class="card"><div class="k">Baseline MAE / RMSE / corr</div><div><b>${{fmt(overview.mae_base)}}</b> / ${{fmt(overview.rmse_base)}} / ${{fmt(overview.corr_base)}}</div></div>
+      <div class="card"><div class="k">Delta (Current - Baseline)</div><div><b>${{fmtSigned(overview.delta_mae)}}</b> / ${{fmtSigned(overview.delta_rmse)}} / ${{fmtSigned(overview.delta_corr)}}</div></div>
+      <div class="card"><div class="k">Coverage</div><div><b>${{nCur ?? ""}}</b> / ${{nBase ?? ""}} (${{fmtPct((nCur && nBase) ? nCur / nBase : null)}})</div></div>
+    `;
+  }}
+
+  const domainRows = (g.domain || []).map(r => `<tr>
+    <td>${{r.domain ?? ""}}</td>
+    <td>${{r.n ?? ""}}</td>
+    <td>${{r.sample_count ?? ""}}</td>
+    <td>${{r.group_count ?? ""}}</td>
+    <td>${{fmt(r.mae)}}</td>
+    <td>${{fmt(r.rmse)}}</td>
+    <td>${{fmt(r.corr)}}</td>
+    <td>${{fmt(r.bias)}}</td>
+    <td>${{fmt(r.p90_abs_error)}}</td>
+  </tr>`).join("");
+  document.querySelector("#genDomainTable tbody").innerHTML = domainRows;
+
+  const groupRows = (g.group || []).map(r => `<tr>
+    <td>${{r.group_id ?? ""}}</td>
+    <td>${{r.group_raw ?? ""}}</td>
+    <td>${{r.n ?? ""}}</td>
+    <td>${{r.sample_count ?? ""}}</td>
+    <td>${{fmt(r.mae)}}</td>
+    <td>${{fmt(r.rmse)}}</td>
+    <td>${{fmt(r.corr)}}</td>
+    <td>${{fmt(r.bias)}}</td>
+    <td>${{fmt(r.p90_abs_error)}}</td>
+  </tr>`).join("");
+  document.querySelector("#genGroupTable tbody").innerHTML = groupRows;
+
+  const deltaRows = (g.delta || []).map(r => `<tr>
+    <td>${{r.group_id ?? ""}}</td>
+    <td>${{r.group_raw ?? ""}}</td>
+    <td>${{r.n_base ?? ""}}</td>
+    <td>${{r.n_cur ?? ""}}</td>
+    <td>${{fmtPct(r.coverage_ratio)}}</td>
+    <td>${{fmt(r.mae_base)}}</td>
+    <td>${{fmt(r.mae_cur)}}</td>
+    <td>${{fmtSigned(r.delta_mae)}}</td>
+    <td>${{fmt(r.rmse_base)}}</td>
+    <td>${{fmt(r.rmse_cur)}}</td>
+    <td>${{fmtSigned(r.delta_rmse)}}</td>
+    <td>${{fmt(r.corr_base)}}</td>
+    <td>${{fmt(r.corr_cur)}}</td>
+    <td>${{fmtSigned(r.delta_corr)}}</td>
+  </tr>`).join("");
+  document.querySelector("#genDeltaTable tbody").innerHTML = deltaRows;
+
+  const sampleRows = (g.samples || []).map(r => `<tr>
+    <td>${{r.sample ?? ""}}</td>
+    <td>${{r.group_id ?? ""}}</td>
+    <td>${{r.group_raw ?? ""}}</td>
+    <td>${{r.n ?? ""}}</td>
+    <td>${{fmt(r.mae)}}</td>
+    <td>${{fmt(r.rmse)}}</td>
+    <td>${{fmt(r.corr)}}</td>
+    <td>${{fmt(r.bias)}}</td>
+    <td>${{fmt(r.p90_abs_error)}}</td>
+    <td>${{fmt(r.first_sec, 0)}}</td>
+  </tr>`).join("");
+  document.querySelector("#genSampleTable tbody").innerHTML = sampleRows;
+}}
+
+function buildLagPath(rows, metricKey, xFn, yFn) {{
+  if (!rows.length) return "";
+  let d = "";
+  for (let i = 0; i < rows.length; i += 1) {{
+    const x = xFn(Number(rows[i].lag)).toFixed(2);
+    const y = yFn(Number(rows[i][metricKey])).toFixed(2);
+    d += (i === 0 ? `M ${{x}} ${{y}}` : ` L ${{x}} ${{y}}`);
+  }}
+  return d;
+}}
+
+function drawLagCurvePlot(metricKey) {{
+  const svg = document.getElementById("lagCurvePlot");
+  const base = (LAG_ANALYSIS.curve_baseline || []).slice().sort((a, b) => Number(a.lag) - Number(b.lag));
+  const cur = (LAG_ANALYSIS.curve_current || []).slice().sort((a, b) => Number(a.lag) - Number(b.lag));
+  if (!svg) return;
+  if (!base.length && !cur.length) {{
+    svg.innerHTML = "";
+    return;
+  }}
+
+  const all = base.concat(cur).filter(r => !Number.isNaN(Number(r[metricKey])));
+  const xVals = all.map(r => Number(r.lag));
+  const yVals = all.map(r => Number(r[metricKey]));
+  if (!xVals.length || !yVals.length) {{
+    svg.innerHTML = "";
+    return;
+  }}
+
+  const w = 960, h = 340;
+  const ml = 52, mr = 20, mt = 12, mb = 40;
+  const xMin = Math.min(...xVals);
+  const xMax = Math.max(...xVals);
+  const xSpan = Math.max(1, xMax - xMin);
+  let yMin = Math.min(...yVals);
+  let yMax = Math.max(...yVals);
+  const yPad = Math.max(0.1, (yMax - yMin) * 0.15);
+  yMin = Math.max(0, yMin - yPad);
+  yMax = yMax + yPad;
+  const ySpan = Math.max(1e-9, yMax - yMin);
+
+  const xFn = x => ml + (w - ml - mr) * (x - xMin) / xSpan;
+  const yFn = y => mt + (h - mt - mb) * (1 - (y - yMin) / ySpan);
+
+  const basePath = buildLagPath(base, metricKey, xFn, yFn);
+  const curPath = buildLagPath(cur, metricKey, xFn, yFn);
+
+  const grid = [];
+  for (let i = 0; i <= 5; i += 1) {{
+    const yy = mt + (h - mt - mb) * i / 5;
+    const val = yMax - (ySpan * i / 5);
+    grid.push(`<line x1="${{ml}}" y1="${{yy.toFixed(2)}}" x2="${{w - mr}}" y2="${{yy.toFixed(2)}}" stroke="#eef2f7" stroke-width="1"/>`);
+    grid.push(`<text x="${{ml - 8}}" y="${{(yy + 4).toFixed(2)}}" text-anchor="end" class="axis-label">${{val.toFixed(2)}}</text>`);
+  }}
+  for (let lag = Math.ceil(xMin); lag <= Math.floor(xMax); lag += 2) {{
+    const xx = xFn(lag).toFixed(2);
+    grid.push(`<line x1="${{xx}}" y1="${{mt}}" x2="${{xx}}" y2="${{h - mb}}" stroke="#f3f4f6" stroke-width="1"/>`);
+    grid.push(`<text x="${{xx}}" y="${{h - 10}}" text-anchor="middle" class="axis-label">${{lag}}</text>`);
+  }}
+
+  svg.innerHTML = `
+    <rect x="0" y="0" width="${{w}}" height="${{h}}" fill="#fff"/>
+    ${{grid.join("")}}
+    <line x1="${{ml}}" y1="${{h - mb}}" x2="${{w - mr}}" y2="${{h - mb}}" stroke="#9ca3af"/>
+    <line x1="${{ml}}" y1="${{mt}}" x2="${{ml}}" y2="${{h - mb}}" stroke="#9ca3af"/>
+    <text x="${{w / 2}}" y="${{h - 10}}" text-anchor="middle" class="axis-label">lag (sec)</text>
+    <text x="14" y="${{h / 2}}" text-anchor="middle" class="axis-label" transform="rotate(-90 14 ${{h/2}})">${{metricKey.toUpperCase()}}</text>
+    <path d="${{basePath}}" fill="none" stroke="#1d4ed8" stroke-width="2.2"/>
+    <path d="${{curPath}}" fill="none" stroke="#ea580c" stroke-width="2.2"/>
+  `;
+}}
+
+function renderLagAnalysis() {{
+  const metricKey = (document.getElementById("lagMetric")?.value || "mae").toLowerCase();
+  const base = (LAG_ANALYSIS.curve_baseline || []).slice().sort((a, b) => Number(a.lag) - Number(b.lag));
+  const cur = (LAG_ANALYSIS.curve_current || []).slice().sort((a, b) => Number(a.lag) - Number(b.lag));
+  const meta = document.getElementById("lagMeta");
+
+  if (!base.length && !cur.length) {{
+    if (meta) meta.textContent = "未找到 lag 分析 CSV（可通过 --lag-*-csv 指定）。";
+    return;
+  }}
+
+  drawLagCurvePlot(metricKey);
+
+  const pickMin = rows => {{
+    if (!rows.length) return null;
+    return rows.reduce((best, curRow) => {{
+      const curV = Number(curRow[metricKey]);
+      if (!best) return curRow;
+      return curV < Number(best[metricKey]) ? curRow : best;
+    }}, null);
+  }};
+  const base0 = base.find(r => Number(r.lag) === 0) || null;
+  const cur0 = cur.find(r => Number(r.lag) === 0) || null;
+  const baseBest = pickMin(base);
+  const curBest = pickMin(cur);
+  if (meta) {{
+    meta.textContent =
+      `metric=${{metricKey.toUpperCase()}} | baseline lag0=${{base0 ? fmt(base0[metricKey]) : ""}}, best=${{baseBest ? fmt(baseBest[metricKey]) : ""}}@lag=${{baseBest ? baseBest.lag : ""}} | ` +
+      `current lag0=${{cur0 ? fmt(cur0[metricKey]) : ""}}, best=${{curBest ? fmt(curBest[metricKey]) : ""}}@lag=${{curBest ? curBest.lag : ""}}`;
+  }}
+
+  const curveMap = new Map();
+  for (const r of base) {{
+    const k = String(r.lag);
+    curveMap.set(k, {{
+      lag: Number(r.lag),
+      baseline_n: r.n,
+      baseline_mae: r.mae,
+      baseline_rmse: r.rmse,
+      current_n: null,
+      current_mae: null,
+      current_rmse: null,
+    }});
+  }}
+  for (const r of cur) {{
+    const k = String(r.lag);
+    const item = curveMap.get(k) || {{
+      lag: Number(r.lag),
+      baseline_n: null,
+      baseline_mae: null,
+      baseline_rmse: null,
+      current_n: null,
+      current_mae: null,
+      current_rmse: null,
+    }};
+    item.current_n = r.n;
+    item.current_mae = r.mae;
+    item.current_rmse = r.rmse;
+    curveMap.set(k, item);
+  }}
+  const curveRows = Array.from(curveMap.values()).sort((a, b) => a.lag - b.lag);
+  document.querySelector("#lagCurveTable tbody").innerHTML = curveRows.map(r => `<tr>
+    <td>${{r.lag}}</td>
+    <td>${{r.baseline_n ?? ""}}</td>
+    <td>${{fmt(r.baseline_mae)}}</td>
+    <td>${{fmt(r.baseline_rmse)}}</td>
+    <td>${{r.current_n ?? ""}}</td>
+    <td>${{fmt(r.current_mae)}}</td>
+    <td>${{fmt(r.current_rmse)}}</td>
+  </tr>`).join("");
+
+  const sampleCols = rows => rows.map(r => `<tr>
+    <td>${{r.sample ?? ""}}</td>
+    <td>${{r.n0 ?? ""}}</td>
+    <td>${{fmt(r.mae_lag0)}}</td>
+    <td>${{r.best_lag ?? ""}}</td>
+    <td>${{fmt(r.best_mae)}}</td>
+    <td>${{r.best_n ?? ""}}</td>
+    <td>${{fmt(r.mae_gain)}}</td>
+    <td>${{fmtPct(r.gain_ratio)}}</td>
+  </tr>`).join("");
+  document.querySelector("#lagSampleBaselineTable tbody").innerHTML = sampleCols(LAG_ANALYSIS.sample_baseline || []);
+  document.querySelector("#lagSampleCurrentTable tbody").innerHTML = sampleCols(LAG_ANALYSIS.sample_current || []);
+
+  document.querySelector("#lagCommonWindowTable tbody").innerHTML = (LAG_ANALYSIS.commonwindow || []).map(r => `<tr>
+    <td>${{r.sample ?? ""}}</td>
+    <td>${{r.n_common ?? ""}}</td>
+    <td>${{r.best_lag_mae ?? ""}}</td>
+    <td>${{fmt(r.best_mae)}}</td>
+    <td>${{fmt(r.lag0_mae)}}</td>
+    <td>${{fmt(r.mae_gain)}}</td>
+    <td>${{r.best_lag_corr ?? ""}}</td>
+    <td>${{fmt(r.best_corr)}}</td>
+    <td>${{fmt(r.lag0_corr)}}</td>
+    <td>${{fmt(r.corr_gain)}}</td>
+  </tr>`).join("");
+
+  document.querySelector("#lagDiffCorrTable tbody").innerHTML = (LAG_ANALYSIS.diffcorr || []).map(r => `<tr>
+    <td>${{r.sample ?? ""}}</td>
+    <td>${{r.n ?? ""}}</td>
+    <td>${{fmt(r.lag0_diff_mae)}}</td>
+    <td>${{fmt(r.lag0_diff_corr)}}</td>
+    <td>${{r.best_lag_by_diff_corr ?? ""}}</td>
+    <td>${{fmt(r.best_diff_mae)}}</td>
+    <td>${{fmt(r.best_diff_corr)}}</td>
+    <td>${{fmt(r.corr_gain)}}</td>
+  </tr>`).join("");
+
+  document.querySelector("#lagGlobalDiffTable tbody").innerHTML = (LAG_ANALYSIS.global_diff_curve || []).map(r => `<tr>
+    <td>${{r.lag ?? ""}}</td>
+    <td>${{fmt(r.diff_mae)}}</td>
+    <td>${{fmt(r.diff_corr)}}</td>
+    <td>${{r.n ?? ""}}</td>
   </tr>`).join("");
 }}
 
@@ -822,6 +1587,8 @@ function drawHrPlot() {{
 renderHrTable();
 renderWarmup();
 renderTimeToKTable();
+renderGeneralization();
+renderLagAnalysis();
 filterMatrixRows();
 (() => {{
   const first = document.getElementById("plotSample");
@@ -849,6 +1616,18 @@ def main() -> None:
     warmup_csv_out = Path(args.warmup_csv_out)
     time_to_k_csv_out = Path(args.time_to_k_csv_out)
     html_out = Path(args.html_out)
+    generalization_domain_csv = Path(args.generalization_domain_csv)
+    generalization_group_csv = Path(args.generalization_group_csv)
+    generalization_delta_csv = Path(args.generalization_delta_csv)
+    generalization_sample_csv = Path(args.generalization_sample_csv)
+    generalization_report_md = Path(args.generalization_report_md)
+    lag_curve_baseline_csv = Path(args.lag_curve_baseline_csv)
+    lag_curve_current_csv = Path(args.lag_curve_current_csv)
+    lag_sample_baseline_csv = Path(args.lag_sample_baseline_csv)
+    lag_sample_current_csv = Path(args.lag_sample_current_csv)
+    lag_commonwindow_sample_csv = Path(args.lag_commonwindow_sample_csv)
+    lag_diffcorr_sample_csv = Path(args.lag_diffcorr_sample_csv)
+    lag_global_diff_csv = Path(args.lag_global_diff_csv)
 
     raw = pd.read_csv(comparison_csv)
     raw["sample"] = raw.apply(_sample_from_row, axis=1)
@@ -883,6 +1662,22 @@ def main() -> None:
 
     sample_stats_json = _build_sample_stats_json(stats_long, thresholds)
     series_json = _build_series_json(df)
+    generalization_json = _build_generalization_json(
+        domain_df=_read_optional_csv(generalization_domain_csv),
+        group_df=_read_optional_csv(generalization_group_csv),
+        delta_df=_read_optional_csv(generalization_delta_csv),
+        sample_df=_read_optional_csv(generalization_sample_csv),
+        report_md=generalization_report_md,
+    )
+    lag_json = _build_lag_json(
+        curve_baseline_df=_read_optional_csv(lag_curve_baseline_csv),
+        curve_current_df=_read_optional_csv(lag_curve_current_csv),
+        sample_baseline_df=_read_optional_csv(lag_sample_baseline_csv),
+        sample_current_df=_read_optional_csv(lag_sample_current_csv),
+        commonwindow_df=_read_optional_csv(lag_commonwindow_sample_csv),
+        diffcorr_df=_read_optional_csv(lag_diffcorr_sample_csv),
+        global_diff_df=_read_optional_csv(lag_global_diff_csv),
+    )
     html_text = _render_html(
         overall_rows=overall_rows,
         matrix_wide=matrix_wide,
@@ -892,6 +1687,8 @@ def main() -> None:
         warmup_thresholds=WARMUP_THRESHOLDS,
         sample_stats_json=sample_stats_json,
         series_json=series_json,
+        generalization_json=generalization_json,
+        lag_json=lag_json,
     )
     html_out.write_text(html_text, encoding="utf-8")
 
