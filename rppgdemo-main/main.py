@@ -113,7 +113,8 @@ class Config:
     publish_conf_sqi_weight: float = 0.45
     publish_conf_freq_weight: float = 0.35
     publish_conf_bias: float = 0.20
-    publish_min_freq_conf_for_output: float = 0.0
+    # Default high-precision publish gate tuned from full-regression runs.
+    publish_min_freq_conf_for_output: float = 0.88
     publish_min_sqi_for_output: float = 0.0
     high_hr_bias_threshold: float = 95.0
     high_hr_bias_gain: float = 1.0
@@ -1887,7 +1888,7 @@ def main() -> None:
                         help="disable lightweight ROI adaptation")
     parser.add_argument("--debug-adaptive-roi", action="store_true",
                         help="print adaptive ROI switch events")
-    parser.add_argument("--publish-min-freq-conf", type=float, default=0.0,
+    parser.add_argument("--publish-min-freq-conf", type=float, default=0.88,
                         help="only publish output when freq_conf >= threshold (0 disables gate)")
     parser.add_argument("--publish-min-sqi", type=float, default=0.0,
                         help="only publish output when SQI >= threshold (0 disables gate)")

@@ -955,13 +955,16 @@ def main() -> None:
     parser.add_argument("--roi-shift-y", type=float, default=0.0)
     parser.add_argument("--mp-face-detector-model", default="")
     parser.add_argument("--strict-roi", action="store_true")
-    parser.add_argument("--use-published", action="store_true")
+    parser.add_argument("--use-published", dest="use_published", action="store_true",
+                        help="use published channel for HR evaluation (default)")
+    parser.add_argument("--use-best", dest="use_published", action="store_false",
+                        help="use best channel (legacy behavior)")
     parser.add_argument("--enable-ppi-assist", action="store_true")
     parser.add_argument("--disable-ppi-assist", action="store_true")
     parser.add_argument("--enable-adaptive-roi", action="store_true", help="enable experimental adaptive ROI switching")
     parser.add_argument("--disable-adaptive-roi", action="store_true", help="disable adaptive ROI switching")
     parser.add_argument("--debug-adaptive-roi", action="store_true")
-    parser.add_argument("--publish-min-freq-conf", type=float, default=0.0,
+    parser.add_argument("--publish-min-freq-conf", type=float, default=0.88,
                         help="when --use-published, keep outputs only if freq_conf >= threshold")
     parser.add_argument("--publish-min-sqi", type=float, default=0.0,
                         help="when --use-published, keep outputs only if SQI >= threshold")
@@ -981,6 +984,7 @@ def main() -> None:
         help="parameter profile used to evaluate rPPG pipeline",
     )
     parser.add_argument("--disable-cbcr", action="store_true", help="exclude CBCR candidates from offline fusion")
+    parser.set_defaults(use_published=True)
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
