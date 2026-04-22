@@ -158,6 +158,24 @@ def _format_pct(value: float) -> str:
     return f"{100.0 * value:.1f}%"
 
 
+def _compute_mape_and_accuracy(
+    ecg_series: pd.Series,
+    pred_series: pd.Series,
+    eps: float = 1e-6,
+) -> tuple[float, float]:
+    ecg = pd.to_numeric(ecg_series, errors="coerce").to_numpy(dtype=float)
+    pred = pd.to_numeric(pred_series, errors="coerce").to_numpy(dtype=float)
+    denom = np.abs(ecg)
+    valid = np.isfinite(ecg) & np.isfinite(pred) & (denom > eps)
+    if not np.any(valid):
+        return (math.nan, math.nan)
+    ape_pct = np.abs(pred[valid] - ecg[valid]) / denom[valid] * 100.0
+    mape_pct = float(np.mean(ape_pct))
+    # Accuracy% is defined against ECG as: max(0, 100 - MAPE%).
+    accuracy_pct = float(max(0.0, 100.0 - mape_pct))
+    return (mape_pct, accuracy_pct)
+
+
 def _compute_stats_table(
     df: pd.DataFrame, thresholds: List[float]
 ) -> pd.DataFrame:
@@ -179,12 +197,15 @@ def _compute_stats_table(
                 bias = float(diff.mean())
                 mae = float(diff.abs().mean())
                 rmse = float(np.sqrt((diff ** 2).mean()))
+                mape_pct, accuracy_pct = _compute_mape_and_accuracy(g_sel["ecg_hr"], g_sel["hr_best"])
             else:
                 ecg_mean = math.nan
                 rppg_mean = math.nan
                 bias = math.nan
                 mae = math.nan
                 rmse = math.nan
+                mape_pct = math.nan
+                accuracy_pct = math.nan
 
             records.append(
                 {
@@ -198,6 +219,8 @@ def _compute_stats_table(
                     "bias_hr": bias,
                     "mae": mae,
                     "rmse": rmse,
+                    "mape_pct": mape_pct,
+                    "accuracy_pct": accuracy_pct,
                 }
             )
 
@@ -246,10 +269,13 @@ def _compute_overall_rows(
             mae = float(diff.abs().mean())
             rmse = float(np.sqrt((diff ** 2).mean()))
             bias = float(diff.mean())
+            mape_pct, accuracy_pct = _compute_mape_and_accuracy(sel["ecg_hr"], sel["hr_best"])
         else:
             mae = math.nan
             rmse = math.nan
             bias = math.nan
+            mape_pct = math.nan
+            accuracy_pct = math.nan
         rows.append(
             {
                 "threshold": thr,
@@ -258,6 +284,8 @@ def _compute_overall_rows(
                 "mae": mae,
                 "rmse": rmse,
                 "bias": bias,
+                "mape_pct": mape_pct,
+                "accuracy_pct": accuracy_pct,
             }
         )
     return rows
@@ -361,6 +389,8 @@ def _build_sample_stats_json(
             "bias": float(row.bias_hr) if np.isfinite(row.bias_hr) else None,
             "mae": float(row.mae) if np.isfinite(row.mae) else None,
             "rmse": float(row.rmse) if np.isfinite(row.rmse) else None,
+            "mape_pct": float(row.mape_pct) if np.isfinite(row.mape_pct) else None,
+            "accuracy_pct": float(row.accuracy_pct) if np.isfinite(row.accuracy_pct) else None,
         }
 
     sorted_samples = sorted(
@@ -722,9 +752,16 @@ def _render_html(
         clean = clean_by_thr.get(round(float(row["threshold"]), 4), {})
         mae_clean = clean.get("mae", math.nan)
         rmse_clean = clean.get("rmse", math.nan)
+        mape_clean = clean.get("mape_pct", math.nan)
+        acc_clean = clean.get("accuracy_pct", math.nan)
         mae_delta = (
             float(mae_clean) - float(row["mae"])
             if np.isfinite(mae_clean) and np.isfinite(row["mae"])
+            else math.nan
+        )
+        acc_delta = (
+            float(acc_clean) - float(row["accuracy_pct"])
+            if np.isfinite(acc_clean) and np.isfinite(row["accuracy_pct"])
             else math.nan
         )
         overall_html_rows.append(
@@ -734,10 +771,15 @@ def _render_html(
             f"<td>{_format_pct(row['coverage'])}</td>"
             f"<td>{_format_float(row['mae'])}</td>"
             f"<td>{_format_float(row['rmse'])}</td>"
+            f"<td>{_format_float(row['mape_pct'])}</td>"
+            f"<td>{_format_float(row['accuracy_pct']) + '%' if np.isfinite(row['accuracy_pct']) else ''}</td>"
             f"<td>{_format_float(row['bias'])}</td>"
             f"<td>{_format_float(float(mae_clean)) if np.isfinite(mae_clean) else ''}</td>"
             f"<td>{_format_float(float(rmse_clean)) if np.isfinite(rmse_clean) else ''}</td>"
+            f"<td>{_format_float(float(mape_clean)) if np.isfinite(mape_clean) else ''}</td>"
+            f"<td>{(_format_float(float(acc_clean)) + '%') if np.isfinite(acc_clean) else ''}</td>"
             f"<td>{_format_float(float(mae_delta)) if np.isfinite(mae_delta) else ''}</td>"
+            f"<td>{(_format_float(float(acc_delta)) + 'pp') if np.isfinite(acc_delta) else ''}</td>"
             "</tr>"
         )
 
@@ -1025,8 +1067,10 @@ input[type="text"], select {{
         <div class="kpi"><div class="k">最佳阈值</div><div class="v" id="kpiBestThreshold">-</div></div>
         <div class="kpi"><div class="k">最佳 MAE</div><div class="v" id="kpiBestMae">-</div></div>
         <div class="kpi"><div class="k">最佳 MAE(排疑似)</div><div class="v" id="kpiBestMaeClean">-</div></div>
+        <div class="kpi"><div class="k">最佳 Accuracy</div><div class="v" id="kpiBestAccuracy">-</div></div>
         <div class="kpi"><div class="k">该阈值覆盖率</div><div class="v" id="kpiBestCoverage">-</div></div>
         <div class="kpi"><div class="k">当前发布 MAE</div><div class="v" id="kpiPublishedMae">-</div></div>
+        <div class="kpi"><div class="k">当前发布 Accuracy</div><div class="v" id="kpiPublishedAccuracy">-</div></div>
         <div class="kpi"><div class="k">当前/基线覆盖</div><div class="v" id="kpiCoverageRatio">-</div></div>
         <div class="kpi"><div class="k">当前最差样本</div><div class="v" id="kpiWorstSample">-</div></div>
       </div>
@@ -1034,8 +1078,8 @@ input[type="text"], select {{
 
     <section class="section panel" id="sec-overall">
       <h2>总体阈值对比</h2>
-      <div class="muted">这是参数决策入口：阈值越高，通常 MAE 更好但覆盖率更低。新增右侧三列用于查看“排除疑似样本后”的变化。</div>
-      <div class="table-wrap"><table><thead><tr><th>threshold</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th><th>Bias(rPPG-ECG)</th><th>MAE(排疑似)</th><th>RMSE(排疑似)</th><th>ΔMAE(排疑似-原始)</th></tr></thead><tbody>
+      <div class="muted">这是参数决策入口：阈值越高，通常 MAE 更好但覆盖率更低。Accuracy 定义为 `max(0, 100 - MAPE%)`，表示相对 ECG 的百分比精度。</div>
+      <div class="table-wrap"><table><thead><tr><th>threshold</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th><th>MAPE%</th><th>Accuracy%</th><th>Bias(rPPG-ECG)</th><th>MAE(排疑似)</th><th>RMSE(排疑似)</th><th>MAPE%(排疑似)</th><th>Accuracy%(排疑似)</th><th>ΔMAE(排疑似-原始)</th><th>ΔAccuracy</th></tr></thead><tbody>
       {"".join(overall_html_rows)}
       </tbody></table></div>
     </section>
@@ -1108,7 +1152,7 @@ input[type="text"], select {{
 
     <section class="section panel" id="sec-hr-table">
       <h2>每一个文件的 HR 测量数值对比</h2>
-      <div class="muted">按阈值筛选后，给出每个文件的 `ECG 均值 / rPPG 均值 / Bias / MAE / RMSE`。</div>
+      <div class="muted">按阈值筛选后，给出每个文件的 `ECG 均值 / rPPG 均值 / Bias / MAE / RMSE / MAPE% / Accuracy%`。</div>
       <div class="controls">
         <label>threshold:
           <select id="hrThreshold" onchange="renderHrTable(); syncPlotThreshold();">
@@ -1122,7 +1166,7 @@ input[type="text"], select {{
       <div class="table-wrap"><table id="hrTable">
         <thead><tr>
           <th>sample</th><th>n_all</th><th>n_used</th><th>coverage</th>
-          <th>ECG均值</th><th>rPPG均值</th><th>Bias</th><th>MAE</th><th>RMSE</th>
+          <th>ECG均值</th><th>rPPG均值</th><th>Bias</th><th>MAE</th><th>RMSE</th><th>MAPE%</th><th>Accuracy%</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
@@ -1297,6 +1341,11 @@ function fmtSigned(v, digits=3) {{
   return s + n.toFixed(digits);
 }}
 
+function fmtPercent(v, digits=2) {{
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
+  return Number(v).toFixed(digits) + "%";
+}}
+
 function normalizeSampleId(sample) {{
   if (sample === null || sample === undefined) return "";
   const s = String(sample).trim();
@@ -1328,6 +1377,8 @@ function updateHeroKpis() {{
   const worst = (GENERALIZATION && Array.isArray(GENERALIZATION.samples) && GENERALIZATION.samples.length)
     ? GENERALIZATION.samples[0]
     : null;
+  const findByThr = (items, thr) => items.find(r => Number(r.threshold).toFixed(2) === Number(thr).toFixed(2)) || null;
+  const published = findByThr(rows, 0.88);
 
   const setTxt = (id, txt) => {{
     const el = document.getElementById(id);
@@ -1337,8 +1388,10 @@ function updateHeroKpis() {{
   setTxt("kpiBestThreshold", best ? `fc>=${{Number(best.threshold).toFixed(2)}}` : "-");
   setTxt("kpiBestMae", best ? fmt(best.mae) : "-");
   setTxt("kpiBestMaeClean", bestClean ? fmt(bestClean.mae) : "-");
+  setTxt("kpiBestAccuracy", best ? fmtPercent(best.accuracy_pct) : "-");
   setTxt("kpiBestCoverage", best ? fmtPct(best.coverage) : "-");
   setTxt("kpiPublishedMae", g.mae_cur !== undefined ? fmt(g.mae_cur) : "-");
+  setTxt("kpiPublishedAccuracy", published ? fmtPercent(published.accuracy_pct) : "-");
   setTxt("kpiCoverageRatio", (g.n_cur && g.n_base) ? `${{fmtPct(g.n_cur / g.n_base)}} (${{g.n_cur}}/${{g.n_base}})` : "-");
   setTxt("kpiWorstSample", worst ? `${{worst.sample}} (MAE=${{fmt(worst.mae)}})` : "-");
 
@@ -1346,7 +1399,7 @@ function updateHeroKpis() {{
   if (suspectEl) {{
     if (SUSPECT_SAMPLES.length) {{
       const chips = SUSPECT_SAMPLES.map(s => `<span class="suspect-chip">${{s}}</span>`).join("");
-      suspectEl.innerHTML = `疑似异常样本标记：${{chips}}（在表格中高亮；总体表显示排除这些样本后的 MAE/RMSE）`;
+      suspectEl.innerHTML = `疑似异常样本标记：${{chips}}（在表格中高亮；总体表显示排除这些样本后的 MAE/RMSE/Accuracy。Accuracy% = max(0, 100 - MAPE%)）`;
     }} else {{
       suspectEl.textContent = "未设置疑似异常样本。";
     }}
@@ -1824,6 +1877,8 @@ function renderHrTable() {{
       <td style="color:${{biasColor}}">${{biasText}}</td>
       <td>${{fmt(s.mae)}}</td>
       <td>${{fmt(s.rmse)}}</td>
+      <td>${{fmt(s.mape_pct)}}</td>
+      <td>${{fmtPercent(s.accuracy_pct)}}</td>
     </tr>`;
   }}).join("");
 }}
@@ -1923,7 +1978,7 @@ function drawHrPlot() {{
   const st = sampleObj && sampleObj.stats ? sampleObj.stats[thr] : null;
   const nAll = sampleObj ? sampleObj.n_all : sec.length;
   const suspectNote = isSuspectSample(sample) ? " | [疑似异常样本]" : "";
-  meta.textContent = `sample=${{sample}} | threshold=${{thr}} | n_used=${{st ? st.n : idx.length}}/${{nAll}} | coverage=${{st ? fmtPct(st.coverage) : ''}} | MAE=${{st ? fmt(st.mae) : ''}} | RMSE=${{st ? fmt(st.rmse) : ''}}${{suspectNote}}`;
+  meta.textContent = `sample=${{sample}} | threshold=${{thr}} | n_used=${{st ? st.n : idx.length}}/${{nAll}} | coverage=${{st ? fmtPct(st.coverage) : ''}} | MAE=${{st ? fmt(st.mae) : ''}} | RMSE=${{st ? fmt(st.rmse) : ''}} | MAPE=${{st ? fmt(st.mape_pct) : ''}}% | Accuracy=${{st ? fmtPercent(st.accuracy_pct) : ''}}${{suspectNote}}`;
 }}
 
 renderHrTable();
