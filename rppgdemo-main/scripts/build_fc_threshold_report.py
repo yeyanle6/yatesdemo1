@@ -125,6 +125,11 @@ def _parse_args() -> argparse.Namespace:
         default="0.80,0.82,0.84,0.86,0.88,0.90,0.92,0.94",
         help="Comma-separated freq_conf thresholds.",
     )
+    parser.add_argument(
+        "--suspect-samples",
+        default="003/1-1",
+        help="Comma-separated suspect sample ids (e.g. 003/1-1,003/3-1).",
+    )
     return parser.parse_args()
 
 
@@ -697,6 +702,7 @@ def _build_lag_json(
 
 def _render_html(
     overall_rows: List[Dict[str, float]],
+    overall_rows_clean: List[Dict[str, float]],
     matrix_wide: pd.DataFrame,
     thresholds: List[float],
     warmup_rows: List[Dict[str, float]],
@@ -706,10 +712,21 @@ def _render_html(
     series_json: str,
     generalization_json: str,
     lag_json: str,
+    suspect_samples: List[str],
 ) -> str:
+    suspect_set = set(suspect_samples)
+    clean_by_thr = {round(float(r["threshold"]), 4): r for r in overall_rows_clean}
     overall_html_rows: List[str] = []
     for row in overall_rows:
         badge = ' <span class="badge">MAE&lt;3</span>' if np.isfinite(row["mae"]) and row["mae"] < 3.0 else ""
+        clean = clean_by_thr.get(round(float(row["threshold"]), 4), {})
+        mae_clean = clean.get("mae", math.nan)
+        rmse_clean = clean.get("rmse", math.nan)
+        mae_delta = (
+            float(mae_clean) - float(row["mae"])
+            if np.isfinite(mae_clean) and np.isfinite(row["mae"])
+            else math.nan
+        )
         overall_html_rows.append(
             "<tr>"
             f"<td>{row['threshold']:.2f}{badge}</td>"
@@ -718,6 +735,9 @@ def _render_html(
             f"<td>{_format_float(row['mae'])}</td>"
             f"<td>{_format_float(row['rmse'])}</td>"
             f"<td>{_format_float(row['bias'])}</td>"
+            f"<td>{_format_float(float(mae_clean)) if np.isfinite(mae_clean) else ''}</td>"
+            f"<td>{_format_float(float(rmse_clean)) if np.isfinite(rmse_clean) else ''}</td>"
+            f"<td>{_format_float(float(mae_delta)) if np.isfinite(mae_delta) else ''}</td>"
             "</tr>"
         )
 
@@ -730,8 +750,10 @@ def _render_html(
 
     matrix_rows: List[str] = []
     for _, row in matrix_wide.iterrows():
+        row_sample = str(row["sample"])
+        row_class = ' class="suspect-row"' if row_sample in suspect_set else ""
         cells = [
-            f"<td>{html.escape(str(row['sample']))}</td>",
+            f"<td>{html.escape(row_sample)}</td>",
             f"<td>{int(row['n_all'])}</td>",
             f"<td>{_format_float(float(row['mae_all']))}</td>",
         ]
@@ -750,7 +772,7 @@ def _render_html(
                     f"<td>{_format_float(float(m_val)) if pd.notna(m_val) else ''}</td>",
                 ]
             )
-        matrix_rows.append("<tr>" + "".join(cells) + "</tr>")
+        matrix_rows.append(f"<tr{row_class}>" + "".join(cells) + "</tr>")
 
     threshold_options = '<option value="all">all</option>' + "".join(
         [f'<option value="{thr:.2f}">{thr:.2f}</option>' for thr in thresholds]
@@ -763,9 +785,11 @@ def _render_html(
     )
     threshold_js = json.dumps([f"{thr:.2f}" for thr in thresholds], ensure_ascii=False)
     overall_json = json.dumps(overall_rows, ensure_ascii=False, separators=(",", ":"))
+    overall_clean_json = json.dumps(overall_rows_clean, ensure_ascii=False, separators=(",", ":"))
     warmup_json = json.dumps(warmup_rows, ensure_ascii=False, separators=(",", ":"))
     time_to_k_json = json.dumps(time_to_k_rows, ensure_ascii=False, separators=(",", ":"))
     warmup_threshold_js = json.dumps([f"{thr:.2f}" for thr in warmup_thresholds], ensure_ascii=False)
+    suspect_samples_json = json.dumps(sorted(suspect_set), ensure_ascii=False, separators=(",", ":"))
 
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -893,6 +917,17 @@ th {{
 }}
 tbody tr:nth-child(even) td {{ background:#fbfdfe; }}
 tbody tr:hover td {{ background:#eaf6f4; }}
+.suspect-row td {{ background:#fff3ea !important; }}
+.suspect-chip {{
+  display:inline-block;
+  padding:3px 8px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:700;
+  background:#ffe5d4;
+  color:#a43b00;
+  margin-right:6px;
+}}
 td:first-child, th:first-child {{
   text-align:left;
   position:sticky;
@@ -985,9 +1020,11 @@ input[type="text"], select {{
       <div class="muted">
         输入：逐秒对齐 CSV。主目标是把“准确度 / 覆盖率 / 可用速度”同时放在同一页中对比，先看顶层结论，再下钻到单文件。
       </div>
+      <div class="muted" id="suspectSummary"></div>
       <div class="kpi-grid">
         <div class="kpi"><div class="k">最佳阈值</div><div class="v" id="kpiBestThreshold">-</div></div>
         <div class="kpi"><div class="k">最佳 MAE</div><div class="v" id="kpiBestMae">-</div></div>
+        <div class="kpi"><div class="k">最佳 MAE(排疑似)</div><div class="v" id="kpiBestMaeClean">-</div></div>
         <div class="kpi"><div class="k">该阈值覆盖率</div><div class="v" id="kpiBestCoverage">-</div></div>
         <div class="kpi"><div class="k">当前发布 MAE</div><div class="v" id="kpiPublishedMae">-</div></div>
         <div class="kpi"><div class="k">当前/基线覆盖</div><div class="v" id="kpiCoverageRatio">-</div></div>
@@ -997,8 +1034,8 @@ input[type="text"], select {{
 
     <section class="section panel" id="sec-overall">
       <h2>总体阈值对比</h2>
-      <div class="muted">这是参数决策入口：阈值越高，通常 MAE 更好但覆盖率更低。</div>
-      <div class="table-wrap"><table><thead><tr><th>threshold</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th><th>Bias(rPPG-ECG)</th></tr></thead><tbody>
+      <div class="muted">这是参数决策入口：阈值越高，通常 MAE 更好但覆盖率更低。新增右侧三列用于查看“排除疑似样本后”的变化。</div>
+      <div class="table-wrap"><table><thead><tr><th>threshold</th><th>n</th><th>coverage</th><th>MAE</th><th>RMSE</th><th>Bias(rPPG-ECG)</th><th>MAE(排疑似)</th><th>RMSE(排疑似)</th><th>ΔMAE(排疑似-原始)</th></tr></thead><tbody>
       {"".join(overall_html_rows)}
       </tbody></table></div>
     </section>
@@ -1235,11 +1272,13 @@ const SAMPLE_STATS = {sample_stats_json};
 const SERIES_DATA = {series_json};
 const THRESHOLDS = {threshold_js};
 const OVERALL_ROWS = {overall_json};
+const CLEAN_OVERALL_ROWS = {overall_clean_json};
 const WARMUP_ROWS = {warmup_json};
 const TIME_TO_K_ROWS = {time_to_k_json};
 const WARMUP_THRESHOLDS = {warmup_threshold_js};
 const GENERALIZATION = {generalization_json};
 const LAG_ANALYSIS = {lag_json};
+const SUSPECT_SAMPLES = {suspect_samples_json};
 
 function fmt(v, digits=3) {{
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "";
@@ -1258,11 +1297,32 @@ function fmtSigned(v, digits=3) {{
   return s + n.toFixed(digits);
 }}
 
+function normalizeSampleId(sample) {{
+  if (sample === null || sample === undefined) return "";
+  const s = String(sample).trim();
+  if (!s.includes("/")) return s;
+  const parts = s.split("/");
+  if (parts.length !== 2) return s;
+  const g = parts[0].replace(/^0+(\\d)/, "$1");
+  const keepG = ["001","002","003"].includes(parts[0]) ? parts[0] : g;
+  return `${{keepG}}/${{parts[1]}}`;
+}}
+
+function isSuspectSample(sample) {{
+  const n = normalizeSampleId(sample);
+  return SUSPECT_SAMPLES.some(x => normalizeSampleId(x) === n);
+}}
+
 function updateHeroKpis() {{
   const rows = (OVERALL_ROWS || []).filter(r => r && r.mae !== null && !Number.isNaN(Number(r.mae)));
+  const cleanRows = (CLEAN_OVERALL_ROWS || []).filter(r => r && r.mae !== null && !Number.isNaN(Number(r.mae)));
   let best = null;
   for (const r of rows) {{
     if (!best || Number(r.mae) < Number(best.mae)) best = r;
+  }}
+  let bestClean = null;
+  for (const r of cleanRows) {{
+    if (!bestClean || Number(r.mae) < Number(bestClean.mae)) bestClean = r;
   }}
   const g = (GENERALIZATION && GENERALIZATION.overview) ? GENERALIZATION.overview : {{}};
   const worst = (GENERALIZATION && Array.isArray(GENERALIZATION.samples) && GENERALIZATION.samples.length)
@@ -1276,10 +1336,21 @@ function updateHeroKpis() {{
 
   setTxt("kpiBestThreshold", best ? `fc>=${{Number(best.threshold).toFixed(2)}}` : "-");
   setTxt("kpiBestMae", best ? fmt(best.mae) : "-");
+  setTxt("kpiBestMaeClean", bestClean ? fmt(bestClean.mae) : "-");
   setTxt("kpiBestCoverage", best ? fmtPct(best.coverage) : "-");
   setTxt("kpiPublishedMae", g.mae_cur !== undefined ? fmt(g.mae_cur) : "-");
   setTxt("kpiCoverageRatio", (g.n_cur && g.n_base) ? `${{fmtPct(g.n_cur / g.n_base)}} (${{g.n_cur}}/${{g.n_base}})` : "-");
   setTxt("kpiWorstSample", worst ? `${{worst.sample}} (MAE=${{fmt(worst.mae)}})` : "-");
+
+  const suspectEl = document.getElementById("suspectSummary");
+  if (suspectEl) {{
+    if (SUSPECT_SAMPLES.length) {{
+      const chips = SUSPECT_SAMPLES.map(s => `<span class="suspect-chip">${{s}}</span>`).join("");
+      suspectEl.innerHTML = `疑似异常样本标记：${{chips}}（在表格中高亮；总体表显示排除这些样本后的 MAE/RMSE）`;
+    }} else {{
+      suspectEl.textContent = "未设置疑似异常样本。";
+    }}
+  }}
 }}
 
 function initTocHighlight() {{
@@ -1515,7 +1586,7 @@ function renderGeneralization() {{
   </tr>`).join("");
   document.querySelector("#genDeltaTable tbody").innerHTML = deltaRows;
 
-  const sampleRows = (g.samples || []).map(r => `<tr>
+  const sampleRows = (g.samples || []).map(r => `<tr class="${{isSuspectSample(r.sample) ? "suspect-row" : ""}}">
     <td>${{r.sample ?? ""}}</td>
     <td>${{r.group_id ?? ""}}</td>
     <td>${{r.group_raw ?? ""}}</td>
@@ -1673,7 +1744,7 @@ function renderLagAnalysis() {{
     <td>${{fmt(r.current_rmse)}}</td>
   </tr>`).join("");
 
-  const sampleCols = rows => rows.map(r => `<tr>
+  const sampleCols = rows => rows.map(r => `<tr class="${{isSuspectSample(r.sample) ? "suspect-row" : ""}}">
     <td>${{r.sample ?? ""}}</td>
     <td>${{r.n0 ?? ""}}</td>
     <td>${{fmt(r.mae_lag0)}}</td>
@@ -1686,7 +1757,7 @@ function renderLagAnalysis() {{
   document.querySelector("#lagSampleBaselineTable tbody").innerHTML = sampleCols(LAG_ANALYSIS.sample_baseline || []);
   document.querySelector("#lagSampleCurrentTable tbody").innerHTML = sampleCols(LAG_ANALYSIS.sample_current || []);
 
-  document.querySelector("#lagCommonWindowTable tbody").innerHTML = (LAG_ANALYSIS.commonwindow || []).map(r => `<tr>
+  document.querySelector("#lagCommonWindowTable tbody").innerHTML = (LAG_ANALYSIS.commonwindow || []).map(r => `<tr class="${{isSuspectSample(r.sample) ? "suspect-row" : ""}}">
     <td>${{r.sample ?? ""}}</td>
     <td>${{r.n_common ?? ""}}</td>
     <td>${{r.best_lag_mae ?? ""}}</td>
@@ -1699,7 +1770,7 @@ function renderLagAnalysis() {{
     <td>${{fmt(r.corr_gain)}}</td>
   </tr>`).join("");
 
-  document.querySelector("#lagDiffCorrTable tbody").innerHTML = (LAG_ANALYSIS.diffcorr || []).map(r => `<tr>
+  document.querySelector("#lagDiffCorrTable tbody").innerHTML = (LAG_ANALYSIS.diffcorr || []).map(r => `<tr class="${{isSuspectSample(r.sample) ? "suspect-row" : ""}}">
     <td>${{r.sample ?? ""}}</td>
     <td>${{r.n ?? ""}}</td>
     <td>${{fmt(r.lag0_diff_mae)}}</td>
@@ -1743,7 +1814,7 @@ function renderHrTable() {{
     const bias = s.bias;
     const biasText = fmt(bias);
     const biasColor = (bias === null || Number.isNaN(Number(bias))) ? "#111827" : (Number(bias) >= 0 ? "#b91c1c" : "#1d4ed8");
-    return `<tr>
+    return `<tr class="${{isSuspectSample(r.sample) ? "suspect-row" : ""}}">
       <td>${{r.sample}}</td>
       <td>${{r.n_all}}</td>
       <td>${{nUsed}}</td>
@@ -1851,7 +1922,8 @@ function drawHrPlot() {{
   const sampleObj = SAMPLE_STATS.find(x => x.sample === sample);
   const st = sampleObj && sampleObj.stats ? sampleObj.stats[thr] : null;
   const nAll = sampleObj ? sampleObj.n_all : sec.length;
-  meta.textContent = `sample=${{sample}} | threshold=${{thr}} | n_used=${{st ? st.n : idx.length}}/${{nAll}} | coverage=${{st ? fmtPct(st.coverage) : ''}} | MAE=${{st ? fmt(st.mae) : ''}} | RMSE=${{st ? fmt(st.rmse) : ''}}`;
+  const suspectNote = isSuspectSample(sample) ? " | [疑似异常样本]" : "";
+  meta.textContent = `sample=${{sample}} | threshold=${{thr}} | n_used=${{st ? st.n : idx.length}}/${{nAll}} | coverage=${{st ? fmtPct(st.coverage) : ''}} | MAE=${{st ? fmt(st.mae) : ''}} | RMSE=${{st ? fmt(st.rmse) : ''}}${{suspectNote}}`;
 }}
 
 renderHrTable();
@@ -1880,6 +1952,9 @@ def main() -> None:
     thresholds = [float(x.strip()) for x in args.thresholds.split(",") if x.strip()]
     if not thresholds:
         thresholds = DEFAULT_THRESHOLDS
+    suspect_samples = sorted(
+        {x.strip() for x in str(args.suspect_samples).split(",") if x.strip()}
+    )
 
     comparison_csv = Path(args.comparison_csv)
     matrix_csv_out = Path(args.matrix_csv_out)
@@ -1913,6 +1988,13 @@ def main() -> None:
     stats_long = _compute_stats_table(df, thresholds)
     matrix_wide = _build_wide_matrix(stats_long, thresholds)
     overall_rows = _compute_overall_rows(df, thresholds)
+    if suspect_samples:
+        df_clean = df[~df["sample"].isin(suspect_samples)].copy()
+        if df_clean.empty:
+            df_clean = df.copy()
+    else:
+        df_clean = df.copy()
+    overall_rows_clean = _compute_overall_rows(df_clean, thresholds)
     warmup_rows = _compute_warmup_rows(df, WARMUP_MIN_SECS, WARMUP_THRESHOLDS)
     time_to_k_rows = _compute_time_to_k_rows(df, TIME_TO_K_THRESHOLDS, TIME_TO_K_KS)
 
@@ -1952,6 +2034,7 @@ def main() -> None:
     )
     html_text = _render_html(
         overall_rows=overall_rows,
+        overall_rows_clean=overall_rows_clean,
         matrix_wide=matrix_wide,
         thresholds=thresholds,
         warmup_rows=warmup_rows,
@@ -1961,6 +2044,7 @@ def main() -> None:
         series_json=series_json,
         generalization_json=generalization_json,
         lag_json=lag_json,
+        suspect_samples=suspect_samples,
     )
     html_out.write_text(html_text, encoding="utf-8")
 
