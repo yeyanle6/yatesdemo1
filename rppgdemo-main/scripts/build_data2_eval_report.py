@@ -416,6 +416,70 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       color: var(--muted);
       font-size: 12px;
     }}
+    .viz-grid {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+    }}
+    .viz-card {{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fbfefe;
+    }}
+    .viz-title {{
+      margin: 0 0 6px;
+      color: #234b50;
+      font-size: 14px;
+      font-weight: 700;
+    }}
+    .viz-controls {{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+      align-items: center;
+    }}
+    .viz-controls label {{
+      font-size: 12px;
+      color: var(--muted);
+    }}
+    .viz-controls select,
+    .viz-controls input[type="range"] {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 8px;
+      background: #fff;
+      color: #12393d;
+      font-size: 12px;
+    }}
+    .viz-controls .tiny {{
+      font-size: 12px;
+      color: #12393d;
+      min-width: 42px;
+      text-align: right;
+      font-weight: 700;
+    }}
+    svg.plot {{
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }}
+    .axis-label {{
+      font-size: 11px;
+      fill: #5b6d71;
+    }}
+    .bar-label {{
+      font-size: 11px;
+      fill: #183e42;
+    }}
+    .bar-value {{
+      font-size: 11px;
+      fill: #0d4b53;
+      font-weight: 700;
+    }}
   </style>
 </head>
 <body>
@@ -460,6 +524,39 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       </div>
       <div class="foot" id="footNote"></div>
     </section>
+
+    <section class="panel">
+      <h2 id="vizTitle"></h2>
+      <div class="viz-controls">
+        <label id="vizMetricLabel" for="vizMetric"></label>
+        <select id="vizMetric"></select>
+        <label id="vizGroupLabel" for="vizGroup"></label>
+        <select id="vizGroup"></select>
+        <label id="vizTopNLabel" for="vizTopN"></label>
+        <input id="vizTopN" type="range" min="5" max="30" step="1" value="12" />
+        <span id="vizTopNVal" class="tiny">12</span>
+      </div>
+      <div class="viz-grid">
+        <div class="viz-card">
+          <h3 class="viz-title" id="vizDeviceTitle"></h3>
+          <svg id="devicePlot" class="plot" viewBox="0 0 900 340" role="img" aria-label="device plot"></svg>
+        </div>
+        <div class="viz-card">
+          <h3 class="viz-title" id="vizSampleTitle"></h3>
+          <svg id="samplePlot" class="plot" viewBox="0 0 900 520" role="img" aria-label="sample plot"></svg>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 id="paramTitle"></h2>
+      <div class="table-wrap">
+        <table id="paramTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
   </div>
 
   <script>
@@ -479,6 +576,45 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         foot: "注：corr 在短窗口和低波动 HR 条件下不稳定，MAE/RMSE 更具可比性。",
         gCols: ["Group","Device","best n","best MAE","best RMSE","best corr","pub n","pub MAE","pub RMSE","pub corr","Coverage"],
         sCols: ["Group","Stem","Device","Cond","best n","best MAE","best RMSE","pub n","pub MAE","pub RMSE","Coverage","ECG mean","best mean","pub mean","best bias","pub bias"],
+        vizTitle: "交互可视化",
+        vizMetric: "指标",
+        vizGroup: "组别",
+        vizTopN: "Top N 样本",
+        vizDeviceTitle: "设备级指标对比",
+        vizSampleTitle: "样本级指标条形图",
+        paramTitle: "参数解释（定义 / 单位 / 解读）",
+        pCols: ["参数", "定义", "单位/公式", "如何解读"],
+        metricOpts: {{
+          best_mae: "best MAE",
+          pub_mae: "published MAE",
+          coverage: "Coverage",
+          best_rmse: "best RMSE",
+          pub_rmse: "published RMSE",
+          best_corr: "best corr",
+          pub_corr: "published corr"
+        }},
+        allGroups: "全部",
+        noData: "当前筛选无数据",
+        params: [
+          ["group", "数据分组ID（映射到设备）", "字符串", "用于区分不同设备或采集组。"],
+          ["stem", "文件样本名（视频/ECG 对）", "字符串", "唯一定位单个测试文件。"],
+          ["device", "采集设备", "字符串", "例如 iphone16e / lenovo。"],
+          ["condition", "实验条件编号", "C1~C6", "对应同一批次同步采集条件。"],
+          ["best n", "best 通道有效对齐点数", "计数", "越高表示可用估计越多。"],
+          ["pub n", "published 通道有效对齐点数", "计数", "经过发布门控后剩余点数。"],
+          ["best MAE", "best 通道平均绝对误差", "BPM", "越低越好；<=3 通常较优。"],
+          ["published MAE", "published 通道平均绝对误差", "BPM", "越低越好；通常比 best 更稳。"],
+          ["best RMSE", "best 通道均方根误差", "BPM", "对大误差更敏感，越低越好。"],
+          ["published RMSE", "published 通道均方根误差", "BPM", "越低越好。"],
+          ["best corr", "best 通道相关系数", "[-1,1]", "越接近 1 越一致；短窗口可能不稳定。"],
+          ["published corr", "published 通道相关系数", "[-1,1]", "同上。"],
+          ["Coverage", "发布覆盖率", "pub n / best n", "越高表示门控后保留数据越多。"],
+          ["ECG mean", "参考 ECG 平均 HR", "BPM", "该样本 ECG 基线。"],
+          ["best mean", "best 平均估计 HR", "BPM", "与 ECG mean 的差可观察系统偏差。"],
+          ["pub mean", "published 平均估计 HR", "BPM", "发布结果的平均值。"],
+          ["best bias", "best 平均偏差", "mean(est-ecg)", "正值=估计偏高，负值=估计偏低。"],
+          ["pub bias", "published 平均偏差", "mean(est-ecg)", "同上。"]
+        ],
       }},
       en: {{
         title: "Data2 RPPG Evaluation Report (Data1-style)",
@@ -494,6 +630,45 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         foot: "Note: corr can be unstable in short windows or low-HR-variance segments; MAE/RMSE are more comparable.",
         gCols: ["Group","Device","best n","best MAE","best RMSE","best corr","pub n","pub MAE","pub RMSE","pub corr","Coverage"],
         sCols: ["Group","Stem","Device","Cond","best n","best MAE","best RMSE","pub n","pub MAE","pub RMSE","Coverage","ECG mean","best mean","pub mean","best bias","pub bias"],
+        vizTitle: "Interactive Visualization",
+        vizMetric: "Metric",
+        vizGroup: "Group",
+        vizTopN: "Top N",
+        vizDeviceTitle: "Device-level Metric Comparison",
+        vizSampleTitle: "Sample-level Bar Chart",
+        paramTitle: "Parameter Glossary (Definition / Unit / Interpretation)",
+        pCols: ["Parameter", "Definition", "Unit/Formula", "Interpretation"],
+        metricOpts: {{
+          best_mae: "best MAE",
+          pub_mae: "published MAE",
+          coverage: "Coverage",
+          best_rmse: "best RMSE",
+          pub_rmse: "published RMSE",
+          best_corr: "best corr",
+          pub_corr: "published corr"
+        }},
+        allGroups: "ALL",
+        noData: "No data for current filter",
+        params: [
+          ["group", "Dataset group ID (mapped to device)", "string", "Used to separate devices or acquisition groups."],
+          ["stem", "Sample file key (video/ECG pair)", "string", "Uniquely identifies a test sample."],
+          ["device", "Capture device", "string", "For example iphone16e / lenovo."],
+          ["condition", "Experiment condition ID", "C1~C6", "Synchronized condition index across devices."],
+          ["best n", "Valid aligned points in best channel", "count", "Higher means more usable estimates."],
+          ["pub n", "Valid aligned points in published channel", "count", "Points left after publish gating."],
+          ["best MAE", "Mean Absolute Error of best channel", "BPM", "Lower is better; <=3 is usually strong."],
+          ["published MAE", "Mean Absolute Error of published channel", "BPM", "Lower is better; often more stable."],
+          ["best RMSE", "Root Mean Squared Error of best", "BPM", "More sensitive to large errors."],
+          ["published RMSE", "Root Mean Squared Error of published", "BPM", "Lower is better."],
+          ["best corr", "Correlation of best channel", "[-1,1]", "Closer to 1 means stronger agreement."],
+          ["published corr", "Correlation of published channel", "[-1,1]", "Same as above."],
+          ["Coverage", "Published coverage", "pub n / best n", "Higher means more points survive gating."],
+          ["ECG mean", "Mean ECG HR", "BPM", "ECG baseline for that sample."],
+          ["best mean", "Mean estimated HR in best", "BPM", "Compare with ECG mean for systematic drift."],
+          ["pub mean", "Mean estimated HR in published", "BPM", "Published-channel average."],
+          ["best bias", "Average bias in best", "mean(est-ecg)", "Positive=over-estimation, negative=under."],
+          ["pub bias", "Average bias in published", "mean(est-ecg)", "Same as above."]
+        ],
       }},
       ja: {{
         title: "Data2 RPPG 評価レポート（Data1互換）",
@@ -509,6 +684,45 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         foot: "注: corr は短時間・低変動HRでは不安定になりやすく、MAE/RMSE の方が比較しやすいです。",
         gCols: ["Group","Device","best n","best MAE","best RMSE","best corr","pub n","pub MAE","pub RMSE","pub corr","Coverage"],
         sCols: ["Group","Stem","Device","Cond","best n","best MAE","best RMSE","pub n","pub MAE","pub RMSE","Coverage","ECG mean","best mean","pub mean","best bias","pub bias"],
+        vizTitle: "インタラクティブ可視化",
+        vizMetric: "指標",
+        vizGroup: "グループ",
+        vizTopN: "上位 N サンプル",
+        vizDeviceTitle: "デバイス別指標比較",
+        vizSampleTitle: "サンプル別バー表示",
+        paramTitle: "パラメータ説明（定義 / 単位 / 解釈）",
+        pCols: ["パラメータ", "定義", "単位/式", "解釈"],
+        metricOpts: {{
+          best_mae: "best MAE",
+          pub_mae: "published MAE",
+          coverage: "Coverage",
+          best_rmse: "best RMSE",
+          pub_rmse: "published RMSE",
+          best_corr: "best corr",
+          pub_corr: "published corr"
+        }},
+        allGroups: "全体",
+        noData: "現在の条件にデータがありません",
+        params: [
+          ["group", "データグループID（デバイス対応）", "文字列", "デバイス/収録群の区別に使用。"],
+          ["stem", "サンプル識別子（動画/ECG 対）", "文字列", "単一サンプルを一意に特定。"],
+          ["device", "収録デバイス", "文字列", "例: iphone16e / lenovo。"],
+          ["condition", "実験条件ID", "C1~C6", "デバイス間で同期した条件番号。"],
+          ["best n", "best チャンネル有効点数", "件数", "大きいほど利用可能推定点が多い。"],
+          ["pub n", "published チャンネル有効点数", "件数", "公開ゲート通過後の点数。"],
+          ["best MAE", "best の平均絶対誤差", "BPM", "小さいほど良い（目安 <=3）。"],
+          ["published MAE", "published の平均絶対誤差", "BPM", "小さいほど良い。"],
+          ["best RMSE", "best の二乗平均平方根誤差", "BPM", "大外れ誤差に敏感。"],
+          ["published RMSE", "published の二乗平均平方根誤差", "BPM", "小さいほど良い。"],
+          ["best corr", "best の相関係数", "[-1,1]", "1 に近いほど一致。"],
+          ["published corr", "published の相関係数", "[-1,1]", "同上。"],
+          ["Coverage", "公開カバレッジ", "pub n / best n", "高いほどゲート後の残存率が高い。"],
+          ["ECG mean", "ECG 平均HR", "BPM", "そのサンプルの ECG 基準値。"],
+          ["best mean", "best 平均推定HR", "BPM", "ECG平均との差で系統偏差を確認。"],
+          ["pub mean", "published 平均推定HR", "BPM", "公開チャンネル平均。"],
+          ["best bias", "best 平均バイアス", "mean(est-ecg)", "正=高め推定、負=低め推定。"],
+          ["pub bias", "published 平均バイアス", "mean(est-ecg)", "同上。"]
+        ],
       }}
     }};
 
@@ -540,6 +754,67 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       document.querySelector(`#${{tableId}} thead`).innerHTML = tr;
     }}
 
+    function metricFormat(metric, value) {{
+      if (metric === "coverage") return pct(value);
+      return fmt(value);
+    }}
+
+    function barColor(metric) {{
+      if (metric === "coverage") return "#0b7a75";
+      if (metric.includes("corr")) return "#2b6cb0";
+      if (metric.includes("rmse")) return "#d97706";
+      return "#0d9488";
+    }}
+
+    function drawBarPlot(svgId, rows, metricKey, labelFn, noDataText) {{
+      const svg = document.getElementById(svgId);
+      const w = 900, h = svgId === "samplePlot" ? 520 : 340;
+      const m = {{ left: 180, right: 46, top: 32, bottom: 30 }};
+      const vals = rows
+        .map(r => Number(r[metricKey]))
+        .filter(v => Number.isFinite(v));
+
+      if (!rows.length || !vals.length) {{
+        svg.innerHTML = `<text x="${{w/2}}" y="${{h/2}}" text-anchor="middle" class="axis-label">${{noDataText}}</text>`;
+        return;
+      }}
+      const maxV = Math.max(...vals, metricKey === "coverage" ? 1 : 0.01);
+      const plotW = w - m.left - m.right;
+      const plotH = h - m.top - m.bottom;
+      const rowH = plotH / rows.length;
+      const color = barColor(metricKey);
+
+      const bars = rows.map((r, i) => {{
+        const v = Number(r[metricKey]);
+        const vv = Number.isFinite(v) ? Math.max(v, 0) : 0;
+        const y = m.top + i * rowH + rowH * 0.14;
+        const bh = Math.max(12, rowH * 0.72);
+        const bw = (vv / maxV) * plotW;
+        const label = labelFn(r);
+        return `
+          <text x="8" y="${{(y + bh * 0.74).toFixed(2)}}" class="bar-label">${{label}}</text>
+          <rect x="${{m.left}}" y="${{y.toFixed(2)}}" width="${{bw.toFixed(2)}}" height="${{bh.toFixed(2)}}" fill="${{color}}" opacity="0.86" rx="4" />
+          <text x="${{(m.left + bw + 8).toFixed(2)}}" y="${{(y + bh * 0.74).toFixed(2)}}" class="bar-value">${{metricFormat(metricKey, vv)}}</text>
+        `;
+      }}).join("");
+
+      const ticks = [];
+      for (let i = 0; i <= 4; i++) {{
+        const v = (maxV * i) / 4;
+        const x = m.left + (plotW * i) / 4;
+        ticks.push(`<line x1="${{x.toFixed(2)}}" y1="${{m.top}}" x2="${{x.toFixed(2)}}" y2="${{(h - m.bottom)}}" stroke="#e3edef" />`);
+        ticks.push(`<text x="${{x.toFixed(2)}}" y="${{h - 8}}" text-anchor="middle" class="axis-label">${{metricFormat(metricKey, v)}}</text>`);
+      }}
+
+      svg.innerHTML = `
+        <rect x="0" y="0" width="${{w}}" height="${{h}}" fill="transparent" />
+        <line x1="${{m.left}}" y1="${{m.top}}" x2="${{m.left}}" y2="${{h - m.bottom}}" stroke="#c8d8dc" />
+        <line x1="${{m.left}}" y1="${{h - m.bottom}}" x2="${{w - m.right}}" y2="${{h - m.bottom}}" stroke="#c8d8dc" />
+        ${{ticks.join("")}}
+        ${{bars}}
+      `;
+    }}
+
     function render(lang) {{
       const t = I18N[lang] || I18N.zh;
       document.documentElement.lang = lang === "ja" ? "ja" : (lang === "en" ? "en" : "zh");
@@ -550,6 +825,13 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       document.getElementById("sampleTitle").textContent = t.sampleTitle;
       document.getElementById("sampleFilter").placeholder = t.search;
       document.getElementById("footNote").textContent = t.foot;
+      document.getElementById("vizTitle").textContent = t.vizTitle;
+      document.getElementById("vizMetricLabel").textContent = t.vizMetric;
+      document.getElementById("vizGroupLabel").textContent = t.vizGroup;
+      document.getElementById("vizTopNLabel").textContent = t.vizTopN;
+      document.getElementById("vizDeviceTitle").textContent = t.vizDeviceTitle;
+      document.getElementById("vizSampleTitle").textContent = t.vizSampleTitle;
+      document.getElementById("paramTitle").textContent = t.paramTitle;
 
       const k = DATA.overall;
       const cards = [
@@ -609,12 +891,70 @@ def render_html(payload: Dict[str, object], title: str) -> str:
           <td>${{fmt(r.pub_bias, 2)}}</td>
         </tr>`).join("");
       document.querySelector("#sampleTable tbody").innerHTML = sBody;
+
+      // Visualization controls
+      const metricSel = document.getElementById("vizMetric");
+      const groupSel = document.getElementById("vizGroup");
+      const topNInput = document.getElementById("vizTopN");
+      const topNVal = document.getElementById("vizTopNVal");
+      const metricKeys = Object.keys(t.metricOpts);
+      const prevMetric = metricSel.value || metricSel.dataset.last || "pub_mae";
+      metricSel.innerHTML = metricKeys
+        .map(km => `<option value="${{km}}">${{t.metricOpts[km]}}</option>`)
+        .join("");
+      metricSel.value = metricKeys.includes(prevMetric) ? prevMetric : "pub_mae";
+      metricSel.dataset.last = metricSel.value;
+      const groups = Array.from(new Set(DATA.samples.map(r => r.group))).sort();
+      const prevGroup = groupSel.value || groupSel.dataset.last || "ALL";
+      groupSel.innerHTML = [`<option value="ALL">${{t.allGroups}}</option>`]
+        .concat(groups.map(g => `<option value="${{g}}">${{g}}</option>`))
+        .join("");
+      groupSel.value = (prevGroup === "ALL" || groups.includes(prevGroup)) ? prevGroup : "ALL";
+      groupSel.dataset.last = groupSel.value;
+      if (!topNInput.dataset.inited) {{
+        topNInput.value = "12";
+        topNInput.dataset.inited = "1";
+      }}
+      topNVal.textContent = topNInput.value;
+
+      const metric = metricSel.value || "pub_mae";
+      const pickGroup = groupSel.value || "ALL";
+      const topN = Math.max(5, Math.min(30, Number(topNInput.value || 12)));
+
+      const devRows = DATA.groups
+        .slice()
+        .sort((a, b) => Number(b[metric]) - Number(a[metric]));
+      drawBarPlot("devicePlot", devRows, metric, r => `${{r.group}} · ${{r.device || "-"}}`, t.noData);
+
+      const sampleRows = filtered
+        .filter(r => pickGroup === "ALL" ? true : r.group === pickGroup)
+        .slice()
+        .sort((a, b) => Number(b[metric]) - Number(a[metric]))
+        .slice(0, topN);
+      drawBarPlot("samplePlot", sampleRows, metric, r => `${{r.group}}/${{r.stem}}`, t.noData);
+
+      // Parameter glossary
+      setTableHead("paramTable", t.pCols);
+      document.querySelector("#paramTable tbody").innerHTML = (t.params || []).map(row => `
+        <tr>
+          <td><span class="chip">${{row[0]}}</span></td>
+          <td>${{row[1]}}</td>
+          <td>${{row[2]}}</td>
+          <td>${{row[3]}}</td>
+        </tr>
+      `).join("");
     }}
 
     const langSel = document.getElementById("langSel");
     const sampleFilter = document.getElementById("sampleFilter");
+    const vizMetric = document.getElementById("vizMetric");
+    const vizGroup = document.getElementById("vizGroup");
+    const vizTopN = document.getElementById("vizTopN");
     langSel.addEventListener("change", () => render(langSel.value));
     sampleFilter.addEventListener("input", () => render(langSel.value));
+    vizMetric.addEventListener("change", () => render(langSel.value));
+    vizGroup.addEventListener("change", () => render(langSel.value));
+    vizTopN.addEventListener("input", () => render(langSel.value));
     render("zh");
   </script>
 </body>
