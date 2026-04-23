@@ -101,16 +101,20 @@ def _safe_ratio(a: float, b: float) -> float:
     return a / b
 
 
+def _parse_token_set(text: str) -> set[str]:
+    tokens = [x.strip() for x in (text or "").split(",")]
+    return {x for x in tokens if x}
+
+
 def build_payload(
     best_summary: List[Dict[str, str]],
     pub_summary: List[Dict[str, str]],
     best_detail: List[Dict[str, str]],
     pub_detail: List[Dict[str, str]],
     manifest_rows: List[Dict[str, str]],
+    include_devices: set[str],
+    exclude_devices: set[str],
 ) -> Dict[str, object]:
-    best_overall = _extract_overall(best_summary)
-    pub_overall = _extract_overall(pub_summary)
-
     best_samples = _sample_rows_only(best_summary)
     pub_samples = _sample_rows_only(pub_summary)
 
@@ -119,9 +123,28 @@ def build_payload(
         for r in manifest_rows
     }
 
-    best_by_key = {f"{r.get('group','')}/{r.get('stem','')}": r for r in best_samples}
-    pub_by_key = {f"{r.get('group','')}/{r.get('stem','')}": r for r in pub_samples}
-    all_keys = sorted(set(best_by_key.keys()) | set(pub_by_key.keys()))
+    best_by_key_all = {f"{r.get('group','')}/{r.get('stem','')}": r for r in best_samples}
+    pub_by_key_all = {f"{r.get('group','')}/{r.get('stem','')}": r for r in pub_samples}
+    all_keys_raw = sorted(set(best_by_key_all.keys()) | set(pub_by_key_all.keys()))
+
+    def _device_ok(key: str) -> bool:
+        dev = (manifest_by_key.get(key, {}) or {}).get("device", "")
+        if include_devices and dev not in include_devices:
+            return False
+        if exclude_devices and dev in exclude_devices:
+            return False
+        return True
+
+    all_keys = [k for k in all_keys_raw if _device_ok(k)]
+    key_set = set(all_keys)
+
+    best_by_key = {k: v for k, v in best_by_key_all.items() if k in key_set}
+    pub_by_key = {k: v for k, v in pub_by_key_all.items() if k in key_set}
+
+    best_detail = [r for r in best_detail if f"{r.get('group','')}/{r.get('stem','')}" in key_set]
+    pub_detail = [r for r in pub_detail if f"{r.get('group','')}/{r.get('stem','')}" in key_set]
+    best_overall = _metrics_from_rows(best_detail)
+    pub_overall = _metrics_from_rows(pub_detail)
 
     best_detail_by_key: Dict[str, List[Dict[str, str]]] = {}
     for r in best_detail:
@@ -204,6 +227,8 @@ def build_payload(
         "meta": {
             "n_samples": len(sample_table),
             "source": "Data2_as_Data1",
+            "include_devices": sorted(include_devices),
+            "exclude_devices": sorted(exclude_devices),
         },
     }
     return payload
@@ -623,6 +648,16 @@ def main() -> None:
         "--out-html",
         default="/Users/liangwenwang/Downloads/Code/Demo2/rppgdemo-main/results/visualizations/data2_eval_report.html",
     )
+    parser.add_argument(
+        "--include-devices",
+        default="",
+        help="comma-separated device names to include (exact match from manifest)",
+    )
+    parser.add_argument(
+        "--exclude-devices",
+        default="",
+        help="comma-separated device names to exclude (exact match from manifest)",
+    )
     args = parser.parse_args()
 
     best_summary_path = Path(args.best_summary_csv)
@@ -641,6 +676,8 @@ def main() -> None:
     best_detail = _read_csv(best_detail_path)
     pub_detail = _read_csv(pub_detail_path)
     manifest = _read_csv(manifest_path) if manifest_path.exists() else []
+    include_devices = _parse_token_set(args.include_devices)
+    exclude_devices = _parse_token_set(args.exclude_devices)
 
     payload = build_payload(
         best_summary=best_summary,
@@ -648,6 +685,8 @@ def main() -> None:
         best_detail=best_detail,
         pub_detail=pub_detail,
         manifest_rows=manifest,
+        include_devices=include_devices,
+        exclude_devices=exclude_devices,
     )
     html = render_html(payload, "Data2 RPPG Evaluation Report")
 
