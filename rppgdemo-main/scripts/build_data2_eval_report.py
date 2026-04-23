@@ -578,6 +578,42 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       border-radius: 8px;
       background: #ffffff;
     }}
+    .cond-mini-grid {{
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }}
+    .cond-mini-card {{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fbfefe;
+    }}
+    .cond-mini-head {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }}
+    .cond-mini-title {{
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      color: #0d4b53;
+    }}
+    .cond-mini-meta {{
+      font-size: 11px;
+      color: var(--muted);
+      text-align: right;
+    }}
+    svg.cond-mini-plot {{
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }}
     .axis-label {{
       font-size: 11px;
       fill: #5b6d71;
@@ -696,17 +732,10 @@ def render_html(payload: Dict[str, object], title: str) -> str:
     <section class="panel" id="sec-timeseries">
       <h2 id="tsTitle"></h2>
       <div class="viz-controls">
-        <label id="tsCondLabel" for="tsCond"></label>
-        <select id="tsCond"></select>
-        <label id="tsMetricLabel" for="tsMetric"></label>
-        <select id="tsMetric"></select>
         <label id="tsChannelLabel" for="tsChannel"></label>
         <select id="tsChannel"></select>
       </div>
-      <div class="viz-card">
-        <h3 class="viz-title" id="tsPlotTitle"></h3>
-        <svg id="tsPlot" class="plot" viewBox="0 0 1100 480" role="img" aria-label="timeseries plot"></svg>
-      </div>
+      <div class="cond-mini-grid" id="tsCondGrid"></div>
       <div class="foot" id="tsFoot"></div>
     </section>
 
@@ -755,17 +784,10 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         vizTopN: "Top N 样本",
         vizDeviceTitle: "设备级指标对比",
         vizSampleTitle: "样本级指标条形图",
-        tsTitle: "C1-C6 每秒数据变化对比",
-        tsCond: "条件",
-        tsMetric: "曲线类型",
-        tsChannel: "估计通道",
-        tsPlotTitle: "逐秒趋势图",
-        tsFoot: "黑色虚线为 ECG；彩线为各设备 RPPG。可按条件 C1~C6 对比。",
-        tsAllConds: "全部条件",
-        tsMetricOpts: {{
-          hr: "HR 曲线 (ECG vs RPPG)",
-          abs_err: "绝对误差曲线 |RPPG-ECG|"
-        }},
+        tsTitle: "C1-C6 条件心率小图（ECG / iPhone16e / Lenovo）",
+        tsChannel: "RPPG 通道",
+        tsFoot: "每个小框对应一个条件，固定显示 3 条心率曲线：ECG、iPhone16e RPPG、Lenovo RPPG。",
+        tsCardMeta: "三线对比：ECG / {{a}} / {{b}}",
         tsChannelOpts: {{
           best: "best",
           published: "published"
@@ -834,17 +856,10 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         vizTopN: "Top N",
         vizDeviceTitle: "Device-level Metric Comparison",
         vizSampleTitle: "Sample-level Bar Chart",
-        tsTitle: "C1-C6 Per-Second Trend Comparison",
-        tsCond: "Condition",
-        tsMetric: "Curve Type",
-        tsChannel: "Estimate Channel",
-        tsPlotTitle: "Per-Second Trend Plot",
-        tsFoot: "Black dashed line: ECG; colored lines: device RPPG. Compare by condition C1~C6.",
-        tsAllConds: "ALL Conditions",
-        tsMetricOpts: {{
-          hr: "HR Curves (ECG vs RPPG)",
-          abs_err: "Absolute Error |RPPG-ECG|"
-        }},
+        tsTitle: "C1-C6 Mini HR Panels (ECG / iPhone16e / Lenovo)",
+        tsChannel: "RPPG Channel",
+        tsFoot: "Each panel is one condition with 3 HR lines: ECG, iPhone16e RPPG, and Lenovo RPPG.",
+        tsCardMeta: "3-line view: ECG / {{a}} / {{b}}",
         tsChannelOpts: {{
           best: "best",
           published: "published"
@@ -913,17 +928,10 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         vizTopN: "上位 N サンプル",
         vizDeviceTitle: "デバイス別指標比較",
         vizSampleTitle: "サンプル別バー表示",
-        tsTitle: "C1-C6 秒ごとのデータ推移比較",
-        tsCond: "条件",
-        tsMetric: "曲線タイプ",
-        tsChannel: "推定チャネル",
-        tsPlotTitle: "秒次トレンド図",
-        tsFoot: "黒破線は ECG、色線は各デバイスの RPPG。C1~C6 条件で比較できます。",
-        tsAllConds: "全条件",
-        tsMetricOpts: {{
-          hr: "HR 曲線 (ECG vs RPPG)",
-          abs_err: "絶対誤差 |RPPG-ECG|"
-        }},
+        tsTitle: "C1-C6 ミニHRパネル（ECG / iPhone16e / Lenovo）",
+        tsChannel: "RPPGチャネル",
+        tsFoot: "各パネルは1条件で、ECG・iPhone16e RPPG・Lenovo RPPG の3本線を固定表示します。",
+        tsCardMeta: "3本比較: ECG / {{a}} / {{b}}",
         tsChannelOpts: {{
           best: "best",
           published: "published"
@@ -1067,89 +1075,87 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       return valid.map((p, i) => `${{i === 0 ? "M" : "L"}}${{xFn(p.x).toFixed(2)}},${{yFn(p.y).toFixed(2)}}`).join(" ");
     }}
 
-    function drawTimeSeriesPlot(seriesRows, cond, metric, channel, noDataText) {{
-      const svg = document.getElementById("tsPlot");
-      const w = 1100, h = 480;
-      const m = {{ left: 58, right: 210, top: 28, bottom: 42 }};
+    function shortDeviceName(name) {{
+      const s = String(name || "");
+      const low = s.toLowerCase();
+      if (!s) return "-";
+      if (low.includes("iphone16e")) return "iPhone16e";
+      if (low.includes("lenovo")) return "Lenovo";
+      if (low.includes("iphone13")) return "iPhone13 Pro";
+      return s.replace("-1080p-30fps", "").replace("-720p-30fps", "");
+    }}
+
+    function pickPrimaryDevices(seriesRows) {{
+      const devices = Array.from(new Set((seriesRows || []).map(r => String(r.device || "")).filter(Boolean)));
+      const picked = [];
+      const preferred = [/iphone16e/i, /lenovo/i];
+      for (const re of preferred) {{
+        const found = devices.find(d => re.test(d) && !picked.includes(d));
+        if (found) picked.push(found);
+      }}
+      for (const d of devices) {{
+        if (!picked.includes(d)) picked.push(d);
+        if (picked.length >= 2) break;
+      }}
+      return picked.slice(0, 2);
+    }}
+
+    function avg(nums) {{
+      if (!nums.length) return NaN;
+      return nums.reduce((s, x) => s + x, 0) / nums.length;
+    }}
+
+    function aggregateConditionLine(seriesRows, cond, channel, targetDevice, mode) {{
+      const bySec = new Map();
+      for (const r of (seriesRows || [])) {{
+        if (String(r.condition || "") !== cond) continue;
+        if (targetDevice && String(r.device || "") !== targetDevice) continue;
+        for (const p of (r.points || [])) {{
+          const sec = Number(p.sec);
+          if (!Number.isFinite(sec)) continue;
+          const v = mode === "ecg" ? Number(p.ecg) : Number(channel === "best" ? p.best : p.published);
+          if (!Number.isFinite(v)) continue;
+          const arr = bySec.get(sec) || [];
+          arr.push(v);
+          bySec.set(sec, arr);
+        }}
+      }}
+      return Array.from(bySec.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([sec, arr]) => ({{ x: sec, y: avg(arr) }}));
+    }}
+
+    function drawConditionMiniPlot(svgId, panelData, noDataText) {{
+      const svg = document.getElementById(svgId);
+      if (!svg) return;
+      const w = 520, h = 250;
+      const m = {{ left: 42, right: 10, top: 18, bottom: 30 }};
       const plotW = w - m.left - m.right;
       const plotH = h - m.top - m.bottom;
+      const allPoints = []
+        .concat(panelData.ecg || [])
+        .concat(...(panelData.lines || []).map(l => l.points || []))
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
 
-      const picked = seriesRows.filter(r => cond === "ALL" ? true : r.condition === cond);
-      if (!picked.length) {{
+      if (!allPoints.length) {{
         svg.innerHTML = `<text x="${{w/2}}" y="${{h/2}}" text-anchor="middle" class="axis-label">${{noDataText}}</text>`;
         return;
       }}
 
-      let xMin = Infinity, xMax = -Infinity;
-      let yMin = Infinity, yMax = -Infinity;
-
-      function pushY(v) {{
-        if (Number.isFinite(v)) {{
-          yMin = Math.min(yMin, v);
-          yMax = Math.max(yMax, v);
-        }}
-      }}
-
-      const deviceLines = picked.map(r => {{
-        const pts = (r.points || []).map(p => {{
-          const sec = Number(p.sec);
-          const ecg = Number(p.ecg);
-          const pred = Number(channel === "best" ? p.best : p.published);
-          xMin = Math.min(xMin, sec);
-          xMax = Math.max(xMax, sec);
-          let y = NaN;
-          if (metric === "abs_err") {{
-            if (Number.isFinite(ecg) && Number.isFinite(pred)) y = Math.abs(pred - ecg);
-          }} else {{
-            if (Number.isFinite(pred)) y = pred;
-          }}
-          pushY(y);
-          return {{ x: sec, y, ecg }};
-        }});
-        return {{
-          key: r.key,
-          group: r.group,
-          device: r.device,
-          condition: r.condition,
-          color: deviceColor(r.device || r.group),
-          points: pts,
-        }};
-      }});
-
-      // ECG reference (mean by second across picked rows), only for HR curves.
-      let ecgLine = [];
-      if (metric === "hr") {{
-        const bySec = new Map();
-        for (const r of picked) {{
-          for (const p of (r.points || [])) {{
-            const sec = Number(p.sec);
-            const ecg = Number(p.ecg);
-            if (!Number.isFinite(sec) || !Number.isFinite(ecg)) continue;
-            const arr = bySec.get(sec) || [];
-            arr.push(ecg);
-            bySec.set(sec, arr);
-          }}
-        }}
-        ecgLine = Array.from(bySec.entries())
-          .sort((a, b) => a[0] - b[0])
-          .map(([sec, arr]) => {{
-            const y = arr.reduce((s, x) => s + x, 0) / Math.max(arr.length, 1);
-            pushY(y);
-            return {{ x: sec, y }};
-          }});
-      }}
-
+      let xMin = Math.min(...allPoints.map(p => p.x));
+      let xMax = Math.max(...allPoints.map(p => p.x));
+      let yMin = Math.min(...allPoints.map(p => p.y));
+      let yMax = Math.max(...allPoints.map(p => p.y));
       if (!Number.isFinite(xMin) || !Number.isFinite(xMax) || !Number.isFinite(yMin) || !Number.isFinite(yMax)) {{
         svg.innerHTML = `<text x="${{w/2}}" y="${{h/2}}" text-anchor="middle" class="axis-label">${{noDataText}}</text>`;
         return;
       }}
       if (xMax <= xMin) xMax = xMin + 1;
       if (yMax <= yMin) {{
-        const pad0 = Math.max(1, Math.abs(yMax) * 0.1);
-        yMin -= pad0;
-        yMax += pad0;
+        yMin -= 1;
+        yMax += 1;
       }}
-      const yPad = (yMax - yMin) * 0.08;
+      const yPad = Math.max(1, (yMax - yMin) * 0.1);
       yMin -= yPad;
       yMax += yPad;
 
@@ -1157,46 +1163,36 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       const yFn = y => m.top + (yMax - y) / (yMax - yMin) * plotH;
 
       const grid = [];
-      for (let i = 0; i <= 6; i++) {{
-        const xv = xMin + (xMax - xMin) * i / 6;
+      for (let i = 0; i <= 4; i++) {{
+        const xv = xMin + (xMax - xMin) * i / 4;
         const xx = xFn(xv).toFixed(2);
         grid.push(`<line x1="${{xx}}" y1="${{m.top}}" x2="${{xx}}" y2="${{h - m.bottom}}" stroke="#edf4f5" />`);
-        grid.push(`<text x="${{xx}}" y="${{h - 10}}" text-anchor="middle" class="axis-label">${{Math.round(xv)}}s</text>`);
+        grid.push(`<text x="${{xx}}" y="${{h - 8}}" text-anchor="middle" class="axis-label">${{Math.round(xv)}}s</text>`);
       }}
-      for (let i = 0; i <= 5; i++) {{
-        const yv = yMin + (yMax - yMin) * i / 5;
+      for (let i = 0; i <= 4; i++) {{
+        const yv = yMin + (yMax - yMin) * i / 4;
         const yy = yFn(yv).toFixed(2);
         grid.push(`<line x1="${{m.left}}" y1="${{yy}}" x2="${{w - m.right}}" y2="${{yy}}" stroke="#edf4f5" />`);
-        grid.push(`<text x="${{m.left - 8}}" y="${{(Number(yy) + 4).toFixed(2)}}" text-anchor="end" class="axis-label">${{fmt(yv,1)}}</text>`);
       }}
 
-      const ecgPath = metric === "hr"
-        ? `<path d="${{linePath(ecgLine, xFn, yFn)}}" fill="none" stroke="#111827" stroke-width="2.1" stroke-dasharray="6 5" opacity="0.9" />`
+      const ecgPath = linePath(panelData.ecg || [], xFn, yFn);
+      const ecgSvg = ecgPath
+        ? `<path d="${{ecgPath}}" fill="none" stroke="#111827" stroke-width="2.1" stroke-dasharray="6 5" opacity="0.95" />`
         : "";
-
-      const lines = deviceLines.map(l => {{
-        const d = linePath(l.points, xFn, yFn);
+      const lineSvg = (panelData.lines || []).map(l => {{
+        const d = linePath(l.points || [], xFn, yFn);
         if (!d) return "";
-        const tail = [...l.points].reverse().find(p => Number.isFinite(p.y));
-        const lx = tail ? xFn(tail.x) + 6 : (w - m.right - 4);
-        const ly = tail ? yFn(tail.y) + 3 : (m.top + 12);
-        return `
-          <path d="${{d}}" fill="none" stroke="${{l.color}}" stroke-width="2" opacity="0.92" />
-          <text x="${{lx.toFixed(2)}}" y="${{ly.toFixed(2)}}" class="axis-label" fill="${{l.color}}">${{l.group}}</text>
-        `;
+        return `<path d="${{d}}" fill="none" stroke="${{l.color}}" stroke-width="2.1" opacity="0.95" />`;
       }}).join("");
 
       const legend = [];
-      let ly = m.top + 8;
-      if (metric === "hr") {{
-        legend.push(`<line x1="${{w - m.right + 10}}" y1="${{ly}}" x2="${{w - m.right + 40}}" y2="${{ly}}" stroke="#111827" stroke-width="2.1" stroke-dasharray="6 5" />`);
-        legend.push(`<text x="${{w - m.right + 48}}" y="${{ly + 4}}" class="axis-label">ECG</text>`);
-        ly += 18;
-      }}
-      for (const l of deviceLines) {{
-        legend.push(`<line x1="${{w - m.right + 10}}" y1="${{ly}}" x2="${{w - m.right + 40}}" y2="${{ly}}" stroke="${{l.color}}" stroke-width="2.5" />`);
-        legend.push(`<text x="${{w - m.right + 48}}" y="${{ly + 4}}" class="axis-label">${{l.group}} · ${{l.device || "-"}}</text>`);
-        ly += 18;
+      let ly = m.top + 12;
+      legend.push(`<line x1="${{m.left + 6}}" y1="${{ly}}" x2="${{m.left + 28}}" y2="${{ly}}" stroke="#111827" stroke-width="2.1" stroke-dasharray="6 5" />`);
+      legend.push(`<text x="${{m.left + 34}}" y="${{ly + 4}}" class="axis-label">ECG</text>`);
+      for (const l of (panelData.lines || [])) {{
+        ly += 16;
+        legend.push(`<line x1="${{m.left + 6}}" y1="${{ly}}" x2="${{m.left + 28}}" y2="${{ly}}" stroke="${{l.color}}" stroke-width="2.3" />`);
+        legend.push(`<text x="${{m.left + 34}}" y="${{ly + 4}}" class="axis-label">${{l.label}}</text>`);
       }}
 
       svg.innerHTML = `
@@ -1204,11 +1200,57 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         <line x1="${{m.left}}" y1="${{m.top}}" x2="${{m.left}}" y2="${{h - m.bottom}}" stroke="#c8d8dc" />
         <line x1="${{m.left}}" y1="${{h - m.bottom}}" x2="${{w - m.right}}" y2="${{h - m.bottom}}" stroke="#c8d8dc" />
         ${{grid.join("")}}
-        ${{ecgPath}}
-        ${{lines}}
+        ${{ecgSvg}}
+        ${{lineSvg}}
         ${{legend.join("")}}
-        <text x="${{(m.left + plotW/2).toFixed(2)}}" y="${{h - 10}}" text-anchor="middle" class="axis-label">sec</text>
       `;
+    }}
+
+    function renderConditionMiniGrid(lang, channel, noDataText) {{
+      const t = I18N[lang] || I18N.zh;
+      const condGrid = document.getElementById("tsCondGrid");
+      const conditions = (DATA.meta.conditions || []).slice();
+      const primaryDevices = pickPrimaryDevices(DATA.series || []);
+      const d1 = primaryDevices[0] || "";
+      const d2 = primaryDevices[1] || "";
+      const a = shortDeviceName(d1);
+      const b = shortDeviceName(d2);
+      const metaTpl = t.tsCardMeta || "ECG / {{a}} / {{b}}";
+
+      condGrid.innerHTML = conditions.map((cond, idx) => {{
+        const metaText = metaTpl.replace("{{a}}", a).replace("{{b}}", b);
+        return `
+          <div class="cond-mini-card">
+            <div class="cond-mini-head">
+              <h3 class="cond-mini-title">${{cond}}</h3>
+              <div class="cond-mini-meta">${{metaText}}</div>
+            </div>
+            <svg id="condPlot_${{idx}}" class="cond-mini-plot" viewBox="0 0 520 250" role="img" aria-label="${{cond}} mini plot"></svg>
+          </div>
+        `;
+      }}).join("");
+
+      conditions.forEach((cond, idx) => {{
+        const ecg = aggregateConditionLine(DATA.series || [], cond, channel, "", "ecg");
+        const lines = [
+          {{
+            device: d1,
+            label: a,
+            color: "#2563eb",
+            points: d1 ? aggregateConditionLine(DATA.series || [], cond, channel, d1, "rppg") : [],
+          }},
+          {{
+            device: d2,
+            label: b,
+            color: "#ea580c",
+            points: d2 ? aggregateConditionLine(DATA.series || [], cond, channel, d2, "rppg") : [],
+          }},
+        ];
+        drawConditionMiniPlot(`condPlot_${{idx}}`, {{ ecg, lines }}, noDataText);
+      }});
+
+      const foot = document.getElementById("tsFoot");
+      foot.textContent = (t.tsFoot || "").replace("{{a}}", a).replace("{{b}}", b);
     }}
 
     function render(lang) {{
@@ -1238,11 +1280,7 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       document.getElementById("vizDeviceTitle").textContent = t.vizDeviceTitle;
       document.getElementById("vizSampleTitle").textContent = t.vizSampleTitle;
       document.getElementById("tsTitle").textContent = t.tsTitle;
-      document.getElementById("tsCondLabel").textContent = t.tsCond;
-      document.getElementById("tsMetricLabel").textContent = t.tsMetric;
       document.getElementById("tsChannelLabel").textContent = t.tsChannel;
-      document.getElementById("tsPlotTitle").textContent = t.tsPlotTitle;
-      document.getElementById("tsFoot").textContent = t.tsFoot;
       document.getElementById("paramTitle").textContent = t.paramTitle;
 
       const k = DATA.overall;
@@ -1345,25 +1383,8 @@ def render_html(payload: Dict[str, object], title: str) -> str:
         .slice(0, topN);
       drawBarPlot("samplePlot", sampleRows, metric, r => `${{r.group}}/${{r.stem}}`, t.noData);
 
-      // C1~C6 per-second trend controls
-      const tsCondSel = document.getElementById("tsCond");
-      const tsMetricSel = document.getElementById("tsMetric");
+      // C1~C6 mini trend cards
       const tsChannelSel = document.getElementById("tsChannel");
-
-      const conditions = (DATA.meta.conditions || []).slice();
-      const prevTsCond = tsCondSel.value || tsCondSel.dataset.last || "ALL";
-      tsCondSel.innerHTML = [`<option value="ALL">${{t.tsAllConds}}</option>`]
-        .concat(conditions.map(c => `<option value="${{c}}">${{c}}</option>`))
-        .join("");
-      tsCondSel.value = (prevTsCond === "ALL" || conditions.includes(prevTsCond)) ? prevTsCond : "ALL";
-      tsCondSel.dataset.last = tsCondSel.value;
-
-      const tsMetricOpts = t.tsMetricOpts || {{ hr: "HR", abs_err: "|err|" }};
-      const tsMetricKeys = Object.keys(tsMetricOpts);
-      const prevTsMetric = tsMetricSel.value || tsMetricSel.dataset.last || "hr";
-      tsMetricSel.innerHTML = tsMetricKeys.map(km => `<option value="${{km}}">${{tsMetricOpts[km]}}</option>`).join("");
-      tsMetricSel.value = tsMetricKeys.includes(prevTsMetric) ? prevTsMetric : "hr";
-      tsMetricSel.dataset.last = tsMetricSel.value;
 
       const tsChannelOpts = t.tsChannelOpts || {{ best: "best", published: "published" }};
       const tsChannelKeys = Object.keys(tsChannelOpts);
@@ -1372,13 +1393,7 @@ def render_html(payload: Dict[str, object], title: str) -> str:
       tsChannelSel.value = tsChannelKeys.includes(prevTsChannel) ? prevTsChannel : "published";
       tsChannelSel.dataset.last = tsChannelSel.value;
 
-      drawTimeSeriesPlot(
-        DATA.series || [],
-        tsCondSel.value || "ALL",
-        tsMetricSel.value || "hr",
-        tsChannelSel.value || "published",
-        t.noData
-      );
+      renderConditionMiniGrid(lang, tsChannelSel.value || "published", t.noData);
 
       // Parameter glossary
       setTableHead("paramTable", t.pCols);
@@ -1397,16 +1412,12 @@ def render_html(payload: Dict[str, object], title: str) -> str:
     const vizMetric = document.getElementById("vizMetric");
     const vizGroup = document.getElementById("vizGroup");
     const vizTopN = document.getElementById("vizTopN");
-    const tsCond = document.getElementById("tsCond");
-    const tsMetric = document.getElementById("tsMetric");
     const tsChannel = document.getElementById("tsChannel");
     langSel.addEventListener("change", () => render(langSel.value));
     sampleFilter.addEventListener("input", () => render(langSel.value));
     vizMetric.addEventListener("change", () => render(langSel.value));
     vizGroup.addEventListener("change", () => render(langSel.value));
     vizTopN.addEventListener("input", () => render(langSel.value));
-    tsCond.addEventListener("change", () => render(langSel.value));
-    tsMetric.addEventListener("change", () => render(langSel.value));
     tsChannel.addEventListener("change", () => render(langSel.value));
     render("zh");
   </script>
