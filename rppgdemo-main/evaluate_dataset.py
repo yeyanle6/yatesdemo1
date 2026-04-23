@@ -6,8 +6,10 @@ import csv
 import json
 import math
 import re
+import subprocess
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -34,6 +36,13 @@ class Sample:
     stem: str
     video_path: Path
     ecg_csv_path: Path
+    condition: str = ""
+    ecg_sec_offset: int = 0
+    segment_start_clock: str = ""
+    segment_end_clock: str = ""
+    video_start_clock: str = ""
+    video_end_clock: str = ""
+    segment_source: str = ""
 
 
 @dataclass
@@ -49,6 +58,278 @@ class ECGRow:
     hf_interpolated: bool = False
     lfhf_interpolated: bool = False
     lfratio_interpolated: bool = False
+
+
+def _sec_to_clock(sec: int) -> str:
+    x = int(sec) % (24 * 3600)
+    hh = x // 3600
+    mm = (x % 3600) // 60
+    ss = x % 60
+    return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+
+def _clock_delta_sec(start_sec: int, end_sec: int) -> int:
+    # Keep offset in a symmetric range to handle midnight wrap safely.
+    delta = int(end_sec) - int(start_sec)
+    day = 24 * 3600
+    if delta > day // 2:
+        delta -= day
+    elif delta < -day // 2:
+        delta += day
+    return delta
+
+
+def _parse_condition_token(stem: str) -> str:
+    m = re.match(r"^(C\d+)(?:[-_].*)?$", stem.strip(), flags=re.IGNORECASE)
+    return m.group(1).upper() if m else ""
+
+
+def _read_csv_rows_with_fallback(csv_path: Path) -> List[List[str]]:
+    encodings = ("utf-8-sig", "utf-8", "cp932", "shift_jis", "latin1")
+    last_err: Optional[Exception] = None
+    for enc in encodings:
+        try:
+            with csv_path.open("r", encoding=enc, newline="") as f:
+                return list(csv.reader(f))
+        except UnicodeDecodeError as e:
+            last_err = e
+    raise RuntimeError(f"failed to decode ECG CSV: {csv_path}: {last_err}")
+
+
+def _read_ecg_table(csv_path: Path) -> Tuple[List[str], List[List[str]], str]:
+    rows = _read_csv_rows_with_fallback(csv_path)
+    if not rows:
+        raise RuntimeError(f"invalid ECG CSV (empty): {csv_path}")
+
+    start_date = ""
+    header_idx: Optional[int] = None
+    for i, row in enumerate(rows):
+        cols = [c.strip() for c in row]
+        if cols and cols[0].lower() == "start" and len(cols) > 1:
+            start_date = cols[1]
+        if not cols:
+            continue
+        upper = {c.upper() for c in cols if c}
+        lower = {c.lower() for c in cols if c}
+        if "HR" in upper and "time" in lower:
+            header_idx = i
+            break
+
+    if header_idx is None:
+        for i, row in enumerate(rows):
+            cols = [c.strip() for c in row]
+            upper = {c.upper() for c in cols if c}
+            if "HR" in upper:
+                header_idx = i
+                break
+
+    if header_idx is None:
+        raise RuntimeError(f"ECG CSV missing HR header row: {csv_path}")
+
+    header = [c.strip() for c in rows[header_idx]]
+    data_rows = rows[header_idx + 1 :]
+    return header, data_rows, start_date
+
+
+def _table_col_idx(header: List[str], col: str) -> Optional[int]:
+    key = col.strip().lower()
+    for i, name in enumerate(header):
+        if name.strip().lower() == key:
+            return i
+    return None
+
+
+def _safe_cell(row: List[str], idx: Optional[int]) -> str:
+    if idx is None or idx < 0 or idx >= len(row):
+        return ""
+    return row[idx]
+
+
+def _parse_time_series_seconds(csv_path: Path) -> List[int]:
+    header, data_rows, _ = _read_ecg_table(csv_path)
+    time_idx = _table_col_idx(header, "time")
+    if time_idx is None:
+        return []
+    out: List[int] = []
+    for row in data_rows:
+        sec = _clock_to_seconds(_safe_cell(row, time_idx))
+        if sec is not None:
+            out.append(sec)
+    return out
+
+
+def _probe_video_meta(video_path: Path) -> Tuple[Optional[int], Optional[float]]:
+    start_sec: Optional[int] = None
+    duration_sec: Optional[float] = None
+
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration:format_tags=creation_time:stream_tags=creation_time",
+        "-of",
+        "json",
+        str(video_path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode == 0 and proc.stdout.strip():
+            payload = json.loads(proc.stdout)
+            fmt = payload.get("format", {}) if isinstance(payload, dict) else {}
+            streams = payload.get("streams", []) if isinstance(payload, dict) else []
+            duration_txt = fmt.get("duration")
+            if duration_txt is not None:
+                duration_sec = _to_float(str(duration_txt))
+
+            creation_raw = ""
+            if isinstance(fmt.get("tags"), dict):
+                creation_raw = str(fmt["tags"].get("creation_time", "")).strip()
+            if not creation_raw and isinstance(streams, list):
+                for s in streams:
+                    tags = s.get("tags", {}) if isinstance(s, dict) else {}
+                    if isinstance(tags, dict):
+                        creation_raw = str(tags.get("creation_time", "")).strip()
+                        if creation_raw:
+                            break
+            if creation_raw:
+                iso = creation_raw.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                local_dt = dt.astimezone()
+                start_sec = local_dt.hour * 3600 + local_dt.minute * 60 + local_dt.second
+    except Exception:
+        pass
+
+    if duration_sec is None:
+        cap = cv2.VideoCapture(str(video_path))
+        if cap.isOpened():
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+            if fps > 1e-6 and frames > 0:
+                duration_sec = frames / fps
+        cap.release()
+
+    if start_sec is None:
+        m = re.search(r"_(\d{2})_(\d{2})_(\d{2})_", video_path.name)
+        if m:
+            hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            start_sec = hh * 3600 + mm * 60 + ss
+
+    return start_sec, duration_sec
+
+
+def _build_data2_reference_windows(data_dir: Path, ecg_csv: Path) -> Dict[str, Dict[str, object]]:
+    ref_windows: Dict[str, Dict[str, object]] = {}
+
+    # Prefer iPhone13Pro as requested by the dataset convention.
+    ref_dir = data_dir / "iphone13pro-1080p-30fps" / "video"
+    if not ref_dir.exists():
+        return ref_windows
+
+    ecg_times = _parse_time_series_seconds(ecg_csv)
+    if not ecg_times:
+        return ref_windows
+    ecg_base_sec = ecg_times[0]
+
+    for video_path in sorted(ref_dir.iterdir()):
+        if not video_path.is_file() or video_path.suffix.lower() not in {".mp4", ".mov"}:
+            continue
+        cond = _parse_condition_token(video_path.stem)
+        if cond == "":
+            continue
+        start_sec, duration_sec = _probe_video_meta(video_path)
+        if start_sec is None:
+            continue
+        if duration_sec is None:
+            duration_sec = 0.0
+        end_sec = int(round(start_sec + duration_sec))
+        offset_sec = _clock_delta_sec(ecg_base_sec, start_sec)
+        ref_windows[cond] = {
+            "offset_sec": int(offset_sec),
+            "segment_start_clock": _sec_to_clock(start_sec),
+            "segment_end_clock": _sec_to_clock(end_sec),
+            "segment_source": "iphone13pro-1080p-30fps",
+        }
+
+    # Fallback: use lenovo filename timestamps if iPhone metadata cannot be read.
+    if not ref_windows:
+        lenovo_dir = data_dir / "lenovo-720p-30fps" / "video"
+        if lenovo_dir.exists():
+            for video_path in sorted(lenovo_dir.iterdir()):
+                if not video_path.is_file() or video_path.suffix.lower() not in {".mp4", ".mov"}:
+                    continue
+                cond = _parse_condition_token(video_path.stem)
+                if cond == "":
+                    continue
+                start_sec, duration_sec = _probe_video_meta(video_path)
+                if start_sec is None:
+                    continue
+                if duration_sec is None:
+                    duration_sec = 0.0
+                end_sec = int(round(start_sec + duration_sec))
+                offset_sec = _clock_delta_sec(ecg_base_sec, start_sec)
+                ref_windows[cond] = {
+                    "offset_sec": int(offset_sec),
+                    "segment_start_clock": _sec_to_clock(start_sec),
+                    "segment_end_clock": _sec_to_clock(end_sec),
+                    "segment_source": "lenovo-720p-30fps",
+                }
+    return ref_windows
+
+
+def _discover_data2_samples(data_dir: Path) -> List[Sample]:
+    shared_csv_dir = data_dir / "csvdata"
+    if not shared_csv_dir.exists():
+        return []
+
+    # Prefer condition-batch export name, then fallback to any csv.
+    ecg_candidates = sorted(p for p in shared_csv_dir.glob("*.csv") if p.is_file())
+    if not ecg_candidates:
+        return []
+    shared_ecg = next((p for p in ecg_candidates if p.name.lower() == "c1-1_1.csv"), ecg_candidates[0])
+
+    ref_windows = _build_data2_reference_windows(data_dir, shared_ecg)
+    if not ref_windows:
+        return []
+
+    out: List[Sample] = []
+    device_dirs = sorted(
+        p for p in data_dir.iterdir() if p.is_dir() and (p / "video").exists()
+    )
+    for dev_dir in device_dirs:
+        video_dir = dev_dir / "video"
+        for video_path in sorted(video_dir.iterdir()):
+            if not video_path.is_file() or video_path.suffix.lower() not in {".mp4", ".mov"}:
+                continue
+            cond = _parse_condition_token(video_path.stem)
+            if cond == "":
+                continue
+
+            own_start_sec, own_duration_sec = _probe_video_meta(video_path)
+            own_end_sec: Optional[int] = None
+            if own_start_sec is not None and own_duration_sec is not None:
+                own_end_sec = int(round(own_start_sec + own_duration_sec))
+
+            win = ref_windows.get(cond, {})
+            out.append(
+                Sample(
+                    group=dev_dir.name,
+                    stem=video_path.stem,
+                    video_path=video_path,
+                    ecg_csv_path=shared_ecg,
+                    condition=cond,
+                    ecg_sec_offset=int(win.get("offset_sec", 0)),
+                    segment_start_clock=str(win.get("segment_start_clock", "")),
+                    segment_end_clock=str(win.get("segment_end_clock", "")),
+                    video_start_clock=_sec_to_clock(own_start_sec) if own_start_sec is not None else "",
+                    video_end_clock=_sec_to_clock(own_end_sec) if own_end_sec is not None else "",
+                    segment_source=str(win.get("segment_source", "")),
+                )
+            )
+
+    return out
 
 
 def sample_token(group: str, stem: str) -> str:
@@ -99,8 +380,17 @@ def discover_samples(data_dir: Path) -> List[Sample]:
                         stem=stem,
                         video_path=video_path,
                         ecg_csv_path=ecg_path,
+                        condition=_parse_condition_token(stem),
                     )
                 )
+
+    # Data2 style: root-level shared ECG CSV + per-device video folders.
+    for s in _discover_data2_samples(data_dir):
+        key = (s.group, s.stem, str(s.video_path))
+        if key in seen:
+            continue
+        seen.add(key)
+        samples.append(s)
 
     return sorted(samples, key=lambda s: (s.group, s.stem, str(s.video_path)))
 
@@ -141,23 +431,26 @@ def _metric_interp(a: Optional[float], b: Optional[float], ratio: float) -> Tupl
 
 def load_ecg_series(csv_path: Path, align_mode: str = "timestamp") -> Dict[int, ECGRow]:
     raw_rows: List[Tuple[int, Optional[int], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]] = []
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames is None:
-            raise RuntimeError(f"invalid ECG CSV (no header): {csv_path}")
-        if "HR" not in reader.fieldnames:
-            raise RuntimeError(f"ECG CSV missing HR column: {csv_path}")
+    header, data_rows, _ = _read_ecg_table(csv_path)
+    hr_i = _table_col_idx(header, "HR")
+    if hr_i is None:
+        raise RuntimeError(f"ECG CSV missing HR column: {csv_path}")
+    time_i = _table_col_idx(header, "time")
+    rri_i = _table_col_idx(header, "RRI")
+    hf_i = _table_col_idx(header, "HF")
+    lfhf_i = _table_col_idx(header, "LF/HF")
+    lfratio_i = _table_col_idx(header, "LF ratio")
 
-        for idx, row in enumerate(reader):
-            hr = _to_float(row.get("HR", ""))
-            rri = _to_float(row.get("RRI", ""))
-            hf = _to_float(row.get("HF", ""))
-            lfhf = _to_float(row.get("LF/HF", ""))
-            lfratio = _to_float(row.get("LF ratio", ""))
-            sec_abs = _clock_to_seconds(row.get("time", ""))
-            if hr is None and rri is None and hf is None and lfhf is None and lfratio is None:
-                continue
-            raw_rows.append((idx, sec_abs, hr, rri, hf, lfhf, lfratio))
+    for idx, row in enumerate(data_rows):
+        hr = _to_float(_safe_cell(row, hr_i))
+        rri = _to_float(_safe_cell(row, rri_i))
+        hf = _to_float(_safe_cell(row, hf_i))
+        lfhf = _to_float(_safe_cell(row, lfhf_i))
+        lfratio = _to_float(_safe_cell(row, lfratio_i))
+        sec_abs = _clock_to_seconds(_safe_cell(row, time_i))
+        if hr is None and rri is None and hf is None and lfhf is None and lfratio is None:
+            continue
+        raw_rows.append((idx, sec_abs, hr, rri, hf, lfhf, lfratio))
 
     if not raw_rows:
         return {}
@@ -698,10 +991,17 @@ def process_video(
             predictions[sec] = {
                 "group": sample.group,
                 "stem": sample.stem,
+                "condition": sample.condition,
                 "roi_mode_requested": roi_mode,
                 "roi_mode": roi_mode_used,
                 "video_path": str(sample.video_path),
                 "ecg_csv": str(sample.ecg_csv_path),
+                "ecg_sec_offset": sample.ecg_sec_offset,
+                "segment_start_clock": sample.segment_start_clock,
+                "segment_end_clock": sample.segment_end_clock,
+                "video_start_clock": sample.video_start_clock,
+                "video_end_clock": sample.video_end_clock,
+                "segment_source": sample.segment_source,
                 "video_fps": video_fps,
                 "fs_est": fs,
                 "sec": sec,
@@ -752,6 +1052,7 @@ def compare_to_ecg(
     ecg: Dict[int, ECGRow] | List[float],
     use_published: bool,
     metrics: Optional[Set[str]] = None,
+    ecg_sec_offset: int = 0,
 ) -> List[Dict[str, object]]:
     enabled = set(metrics or {"hr", "hf", "lfhf", "lfratio"})
 
@@ -765,11 +1066,13 @@ def compare_to_ecg(
     out: List[Dict[str, object]] = []
     for r in pred_rows:
         sec = int(r["sec"])
-        ecg_row = ecg_map.get(sec)
+        lookup_sec = sec + int(ecg_sec_offset)
+        ecg_row = ecg_map.get(lookup_sec)
         if ecg_row is None:
             continue
 
         merged = dict(r)
+        merged["ecg_sec_lookup"] = lookup_sec
         merged["ecg_sec"] = ecg_row.sec
         merged["ecg_source"] = ecg_row.source
         merged["ecg_hr_interpolated"] = ecg_row.hr_interpolated
@@ -911,10 +1214,17 @@ def _append_sample_summary(
             "split": split_name,
             "group": sample.group,
             "stem": sample.stem,
+            "condition": sample.condition,
             "roi_mode_requested": roi_mode,
             "roi_mode_used": used_mode,
             "video_path": str(sample.video_path),
             "ecg_csv": str(sample.ecg_csv_path),
+            "ecg_sec_offset": sample.ecg_sec_offset,
+            "segment_start_clock": sample.segment_start_clock,
+            "segment_end_clock": sample.segment_end_clock,
+            "video_start_clock": sample.video_start_clock,
+            "video_end_clock": sample.video_end_clock,
+            "segment_source": sample.segment_source,
             "hr_n": hr["n"],
             "hr_mae": hr["mae"],
             "hr_rmse": hr["rmse"],
@@ -1071,6 +1381,7 @@ def main() -> None:
                     ecg,
                     use_published=use_published,
                     metrics=metrics,
+                    ecg_sec_offset=s.ecg_sec_offset,
                 )
                 used_mode = compared[0]["roi_mode"] if compared else "none"
                 for r in compared:
@@ -1116,10 +1427,17 @@ def main() -> None:
                     "split": split_name,
                     "group": "ALL",
                     "stem": "ALL",
+                    "condition": "-",
                     "roi_mode_requested": roi_mode,
                     "roi_mode_used": "mixed",
                     "video_path": "-",
                     "ecg_csv": "-",
+                    "ecg_sec_offset": 0,
+                    "segment_start_clock": "-",
+                    "segment_end_clock": "-",
+                    "video_start_clock": "-",
+                    "video_end_clock": "-",
+                    "segment_source": "-",
                     "hr_n": m["hr"]["n"],
                     "hr_mae": m["hr"]["mae"],
                     "hr_rmse": m["hr"]["rmse"],
@@ -1149,13 +1467,21 @@ def main() -> None:
             "export_channel",
             "group",
             "stem",
+            "condition",
             "roi_mode_requested",
             "roi_mode",
             "video_path",
             "ecg_csv",
+            "ecg_sec_offset",
+            "segment_start_clock",
+            "segment_end_clock",
+            "video_start_clock",
+            "video_end_clock",
+            "segment_source",
             "video_fps",
             "fs_est",
             "sec",
+            "ecg_sec_lookup",
             "ecg_sec",
             "ecg_source",
             "ecg_hr_interpolated",
@@ -1206,10 +1532,17 @@ def main() -> None:
             "export_channel",
             "group",
             "stem",
+            "condition",
             "roi_mode_requested",
             "roi_mode_used",
             "video_path",
             "ecg_csv",
+            "ecg_sec_offset",
+            "segment_start_clock",
+            "segment_end_clock",
+            "video_start_clock",
+            "video_end_clock",
+            "segment_source",
             "hr_n",
             "hr_mae",
             "hr_rmse",
