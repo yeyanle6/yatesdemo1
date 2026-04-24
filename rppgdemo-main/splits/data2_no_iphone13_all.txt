@@ -1,0 +1,14 @@
+# Data2 without iPhone13 Pro
+# format: split,group,stem
+test,102,C1-iphone16e
+test,102,C2-iphone16e
+test,102,C3-iphone16e
+test,102,C4-iphone16e
+test,102,C5-iphone16e
+test,102,C6-iphone16e
+test,103,C1-lenovo
+test,103,C2-lenovo
+test,103,C3-lenovo
+test,103,C4-lenovo
+test,103,C5-lenovo
+test,103,C6-lenovo
